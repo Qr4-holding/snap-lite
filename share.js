@@ -69,7 +69,7 @@ ${owner ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><butt
 <button type="button" id="b-share">More…</button>` : ''}
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><a class="btn sec" id="b-save" href="/api/jobs/${id}/video?dl=1" download="${esc(SKIN.id)}-${id}.mp4">Save to phone</a>
 ${owner ? `<button type="button" class="sec" id="b-copy">Copy link</button>` : ''}</div>
-<p class="small" id="share-note" style="margin:0">${j.state === 'shared' ? `Shared ${j.share_count} time${j.share_count === 1 ? '' : 's'}${j.shared_at ? ', last on ' + new Date(j.shared_at).toLocaleDateString('en-GB') : ''}. ` : ''}${owner ? 'WhatsApp and Facebook send a link that plays the video. “More…” opens the phone's share menu and sends the video file itself.' : ''}</p></div>`;
+<p class="small" id="share-note" style="margin:0">${j.state === 'shared' ? `Shared ${j.share_count} time${j.share_count === 1 ? '' : 's'}${j.shared_at ? ', last on ' + new Date(j.shared_at).toLocaleDateString('en-GB') : ''}. ` : ''}${owner ? 'WhatsApp and Facebook send a link that plays the video. “More…” opens the share menu on your phone and sends the video file itself.' : ''}</p></div>`;
     const script = `
 var ID=${id},TEXT=${JSON.stringify(text)},note=document.getElementById('share-note');
 function say(t){note.textContent=t;}
