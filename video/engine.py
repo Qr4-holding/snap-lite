@@ -31,7 +31,7 @@ import stj_narrated as N
 
 FPS, SR = E.FPS, E.SR
 COVER_S, BEFORE_S, DURING_S, REVEAL_S = 0.8, 2.2, 1.6, 3.6
-MIN_REVEAL_S, MIN_HOLD_S = 2.8, 1.2
+MIN_STILL_F, MIN_REVEAL_F = 15, 30        # frames: a still is never shorter than 0.6 s, the reveal never shorter than 1.2 s
 INK = E.INK
 ENC = ['-c:v', 'libx264', '-preset', os.environ.get('STJ_PRESET', 'veryfast'), '-crf', '19', '-pix_fmt', 'yuv420p']
 
@@ -122,6 +122,32 @@ def concat(files, out):
 
 
 # ---------------------------------------------------------------- voice timing
+def pad_voice(voice, lines, fw, d2, d3, work):
+    """Adds d2 frames of silence just before line 2 and d3 frames before line 3 (in the middle of the pause when there is one), and
+    moves the later lines' timings with it. Returns (new voice file, new lines)."""
+    ins = []   # (voice time, seconds)
+    for idx, d in ((1, d2), (2, d3)):
+        if not d: continue
+        prev_end = float(lines[idx - 1].get('end') or 0.0); first = fw[idx][0]
+        ins.append((round((prev_end + first) / 2, 3) if first > prev_end else max(0.0, first - 0.01), d / FPS, idx))
+    out = os.path.join(work, 'voice_padded.wav'); fmt = 'aformat=sample_rates=44100:channel_layouts=stereo'
+    parts, labels, prev = [], [], 0.0
+    for k, (t, d, _) in enumerate(ins):
+        parts.append(f'[0:a]{fmt},atrim={prev:.4f}:{t:.4f},asetpts=PTS-STARTPTS[p{k}]'); labels.append(f'[p{k}]')
+        parts.append(f'anullsrc=r=44100:cl=stereo,atrim=0:{d:.4f},asetpts=PTS-STARTPTS[z{k}]'); labels.append(f'[z{k}]'); prev = t
+    parts.append(f'[0:a]{fmt},atrim=start={prev:.4f},asetpts=PTS-STARTPTS[pe]'); labels.append('[pe]')
+    E.run(['ffmpeg', '-y', '-v', 'error', '-i', voice, '-filter_complex', ';'.join(parts) + ';' + ''.join(labels) + f'concat=n={len(labels)}:v=0:a=1[o]', '-map', '[o]', out])
+    new = json.loads(json.dumps(lines))
+    for i, ln in enumerate(new):
+        add = sum(d for t, d, idx in ins if i >= idx)
+        if not add: continue
+        for key in ('start', 'end'):
+            if ln.get(key) is not None: ln[key] = round(float(ln[key]) + add, 3)
+        ln['words'] = [[w[0], round(w[1] + add, 3), round(w[2] + add, 3)] for w in (ln.get('words') or [])]
+    return out, new
+
+
+
 def first_words(lines):
     """Voice time of the first spoken word of each line, from the word timings. A line with no word timings falls back to the middle
     of the pause before it. Returns [(seconds, 'word' | 'pause'), ...]."""
@@ -183,16 +209,24 @@ def render(cfg):
     # ---- durations in whole frames
     cover_f = frames(COVER_S)
     hold_s = float(ec.get('hold_seconds', 5))
-    shift = 0.0; fw = []; timing = []
+    shift = 0.0; fw = []; timing = []; padding = []
     if voice and len(lines) >= 3:
         fw = first_words(lines)
         shift = COVER_S - fw[0][0]                                  # the first word of line 1 lands exactly where the BEFORE photo starts
-        c2 = round((fw[1][0] + shift) * FPS); c3 = round((fw[2][0] + shift) * FPS)   # frame numbers of the cuts to line 2 and line 3
-        n_still = 1 + len(during)
-        while n_still > 1 and (c2 - cover_f) < 15 * n_still: n_still -= 1; during = during[:n_still - 1]   # no photo shorter than 0.6 s
-        first_end = max(c2 - cover_f, 8)
-        reveal_f = max(c3 - c2, 20)
-        end_f = max(frames(hold_s), math.ceil((vdur + shift + 0.8) * FPS) - (cover_f + first_end + reveal_f))
+        n_still = 1 + len(during)                                    # every photo is always shown
+        # silence is added to the voice (never a photo dropped) when a line is too short to carry its pictures:
+        # every still gets at least MIN_STILL_F frames, and the reveal at least MIN_REVEAL_F frames
+        c2 = round((fw[1][0] + shift) * FPS); c3 = round((fw[2][0] + shift) * FPS)
+        d2 = max(0, cover_f + MIN_STILL_F * n_still - c2)
+        d3 = max(0, MIN_REVEAL_F - ((c3 + d2) - (c2 + d2)))
+        if d2 or d3:
+            voice, lines = pad_voice(voice, lines, fw, d2, d3, work)
+            vdur = E.duration(voice); fw = first_words(lines)
+            padding = [{'before_line': k, 'seconds': round(d / FPS, 3)} for k, d in ((2, d2), (3, d3)) if d]
+            c2 = round((fw[1][0] + shift) * FPS); c3 = round((fw[2][0] + shift) * FPS)
+        first_end = c2 - cover_f
+        reveal_f = c3 - c2
+        end_f = max(frames(hold_s), math.ceil((vdur + shift + 0.8) * FPS) - c3)
         each = [first_end // n_still + (1 if i < first_end % n_still else 0) for i in range(n_still)]
         for k, (t, src) in enumerate(fw):
             cut_f = (cover_f, cover_f + first_end, cover_f + first_end + reveal_f)[k]
@@ -252,7 +286,7 @@ def render(cfg):
     if abs(vd - total) > 1.0 / FPS + 1e-3: errs.append(f'length {vd:.3f}s, planned {total:.3f}s')
     if size != f'{W},{H}': errs.append(f'size {size}, expected {W}x{H}')
     result = {'ok': not errs, 'duration': round(vd, 3), 'audio': round(ad, 3), 'size': f'{W}x{H}', 'orientation': 'portrait' if portrait else 'landscape',
-              'cuts_s': [round(x / FPS, 2) for x in (cover_f, cover_f + sum(each[:1]), cover_f + sum(each), cover_f + sum(each) + reveal_f)], 'timing': timing, 'errors': errs}
+              'cuts_s': [round(x / FPS, 2) for x in (cover_f, cover_f + sum(each[:1]), cover_f + sum(each), cover_f + sum(each) + reveal_f)], 'timing': timing, 'stills': len(each), 'padding': padding, 'errors': errs}
     for f in segs + [joined]:
         try: os.remove(f)
         except OSError: pass

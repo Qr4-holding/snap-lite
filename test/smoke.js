@@ -1,5 +1,5 @@
 // Smoke tests that run against ANY running server (local or deployed):
-//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|phase5|phase6|all]
+//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|phase5|phase6|engine|all]
 // Phase 2 and 3 create throw-away accounts @snaplite-test.invalid and remove them at the end.
 const http = require('http');
 const sharp = require('sharp');
@@ -347,6 +347,11 @@ async function phase5() {
     ok('Redo with the same lines and voice does not spend a second generation', st2.state === 'ready' && (await usage()).voice_generations === g1, JSON.stringify(await usage()));
     await req(owner, 'POST', `/jobs/${vid}/voice`, { body: form({ ...lines5, line2: 'And here it is, all clear.' }) });
     ok('changing a line makes a new recording', (await wait(vid)).state === 'ready' && (await usage()).voice_generations === g1 + 1);
+    const sh = await J('Garden');
+    for (const [k, q, sd] of [['before', 0, 0], ['during', 0, 10], ['during', 1, 20], ['during', 2, 30], ['after', 0, 50]]) await upload(owner, sh, k, q, real(k === 'during' ? 'work.jpg' : k + '.jpg') || await jpeg(1200, 1600, { shade: sd }));
+    await req(owner, 'POST', `/jobs/${sh}/voice`, { body: form({ voice: 'IosqM5LMIzqPfT0efhhy', line1: 'Here it was.', line2: 'And here it is, swept clean.', line3: 'EKP11. Skip the skip.' }) });
+    const sst = await wait(sh); const stm = (await req(owner, 'GET', `/api/jobs/${sh}/timing`)).json();
+    ok('a very short line 1 with three DURING photos keeps every photo (silence is added instead)', sst.state === 'ready' && stm.stills === 4 && stm.timing.every(t => t.err_ms <= 40), JSON.stringify(stm));
     const nv = await J('Garden'); const vs2 = (await req(owner, 'GET', `/jobs/${nv}/voice`)).text;
     ok('the voice choice is remembered for the next job', /value="IosqM5LMIzqPfT0efhhy" checked/.test(vs2));
   }
@@ -403,6 +408,13 @@ async function phase6() {
   ok('deleting the job kills its link', (await fetch(BASE + path_)).status === 404);
 }
 
+async function engine() {
+  console.log('\n== Engine timing (local, no server) ==');
+  const r = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'engine_timing.py')], { encoding: 'utf8' });
+  (r.stdout || '').split('\n').filter(l => /^(PASS|FAIL)/.test(l)).forEach(l => { const good = l.startsWith('PASS'); good ? pass++ : fail++; console.log(l); });
+  if (r.status !== 0 && !/FAIL/.test(r.stdout || '')) { fail++; console.log('FAIL  engine timing tests did not run: ' + (r.stderr || '').slice(-300)); }
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -413,6 +425,7 @@ async function phase6() {
     if (['phase4', 'all'].includes(which)) await phase4();
     if (['phase5', 'all'].includes(which)) await phase5();
     if (['phase6', 'all'].includes(which)) await phase6();
+    if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -50,7 +50,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
       const r = await runEngine(cf);
       const m = /RESULT (\{.*\})/.exec(r.out); const res = m ? JSON.parse(m[1]) : null;
       if (r.code !== 0 || !res || !res.ok) throw new Error((res && res.errors && res.errors.join('; ')) || (r.err || 'Render failed').slice(-300));
-      fs.writeFileSync(path.join(dir, 'timing.json'), JSON.stringify(res.timing || [])); fs.renameSync(cfg.out, path.join(dir, 'video.mp4')); fs.renameSync(cfg.cover, path.join(dir, 'cover.jpg'));
+      fs.writeFileSync(path.join(dir, 'timing.json'), JSON.stringify({ timing: res.timing || [], stills: res.stills, padding: res.padding || [] })); fs.renameSync(cfg.out, path.join(dir, 'video.mp4')); fs.renameSync(cfg.cover, path.join(dir, 'cover.jpg'));
       await pool.query("UPDATE jobs SET state='ready', video='video.mp4', cover='cover.jpg', dur=$2, render_error=NULL WHERE id=$1 AND state='rendering'", [id, String(res.duration)]);
       events('rendered', null, id, `${res.duration}s in ${Math.round((Date.now() - t0) / 1000)}s`);
     } catch (e) {
@@ -96,8 +96,9 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   app.get('/api/jobs/:id/timing', needUser({ json: true }), async (req, res, next) => { try {
     const j = await jobsMod.getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: 'Job not found.' });
-    let t = []; try { t = JSON.parse(fs.readFileSync(path.join(jobsMod.dirOf(j.id), 'timing.json'), 'utf8')); } catch (e) {}
-    res.set('Cache-Control', 'no-store').json({ timing: t });
+    let t = {}; try { t = JSON.parse(fs.readFileSync(path.join(jobsMod.dirOf(j.id), 'timing.json'), 'utf8')); } catch (e) {}
+    if (Array.isArray(t)) t = { timing: t };
+    res.set('Cache-Control', 'no-store').json({ timing: t.timing || [], stills: t.stills || 0, padding: t.padding || [] });
   } catch (e) { next(e); } });
   app.get('/api/jobs/:id/cover', needUser({ json: true }), sendMedia('cover.jpg', 'image/jpeg'));
 
