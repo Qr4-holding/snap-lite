@@ -248,24 +248,24 @@ note();
     const mine = owner || j.user_id === u.id;
     const done = ['ready', 'approved', 'shared'].includes(j.state);
     const v = encodeURIComponent(j.dur || '') + (j.shared_at ? '' : '');
-    const player = done ? `<video id="vid" controls playsinline preload="metadata" poster="/api/jobs/${j.id}/cover" src="/api/jobs/${j.id}/video" style="width:100%;border-radius:14px;background:#000;max-height:70vh"></video>` : '';
+    const player = done ? `<video id="vid" controls playsinline preload="metadata" poster="/api/jobs/${j.id}/cover" src="/api/jobs/${j.id}/video" style="display:block;margin:0 auto;max-width:100%;width:auto;height:34vh;border-radius:14px;background:#000"></video><button type="button" class="sec small" id="fs" style="margin:6px auto 0">Full screen</button>` : '';
     const busy = j.state === 'rendering' ? '<p class="msg" id="busy">Making your video… this takes about a minute. You can leave this page open.</p>' : '';
     const fail = j.state === 'failed' ? `<p class="msg bad">The video could not be made${j.render_error ? ': ' + esc(j.render_error) : ''}. Try again.</p>` : '';
     const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
     const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
     res.set('Cache-Control', 'no-store').send(page('Job', `
-<h1>${esc(j.job_type || 'Job')}</h1><p><span class="pill on">${LABEL[j.state]}</span> <span class="small">${new Date(j.created_at).toLocaleString('en-GB')}</span></p>
+<h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>
 ${busy}${fail}${player}
+${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve" style="margin-top:10px"><button type="submit">Approve</button></form>` : ''}
 ${sh ? sh.html : ''}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
-<div style="display:grid;gap:10px;margin-top:16px">
+<div style="display:grid;gap:10px;margin-top:12px">
 ${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<a class="btn" href="/jobs/${j.id}/voice">${j.state === 'failed' ? 'Try again' : 'Choose voice and make video'}</a>` : ''}
 ${canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Add or retake photos</a>` : ''}
-${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve"><button type="submit">Approve</button></form>` : ''}
 ${mine && j.state === 'ready' ? `<a class="btn sec" href="/jobs/${j.id}/voice">Change voice or lines</a>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
 ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
-<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll + (sh ? sh.script : '') }));
+<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll + (sh ? sh.script : '') + `var fs=document.getElementById('fs'),v=document.getElementById('vid');if(fs&&v)fs.addEventListener('click',function(){var f=v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen;if(f)f.call(v);});` }));
   } catch (e) { next(e); } });
 
   return { init, getJob, removeJob, dirOf, STATES };

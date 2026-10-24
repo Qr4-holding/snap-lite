@@ -64,11 +64,12 @@ ${SKIN.web ? `<a class="btn sec" href="https://${esc(SKIN.web)}">${esc(SKIN.web)
   // the block of share buttons on the job screen (owner only for sharing; everyone who can open a shared job can save it)
   function panel(j, owner) {
     const id = j.id, text = `${SKIN.name}: before and after.${SKIN.phone ? ' ' + SKIN.phone : ''}`;
-    const html = `<div class="card" id="share">
-${owner ? `<button type="button" id="b-share">Share video</button>` : ''}
-<a class="btn sec" id="b-save" href="/api/jobs/${id}/video?dl=1" download="${esc(SKIN.id)}-${id}.mp4">Save to phone</a>
-${owner ? `<button type="button" class="sec" id="b-copy">Copy link</button>` : ''}
-<p class="small" id="share-note">${j.state === 'shared' ? `Shared ${j.share_count} time${j.share_count === 1 ? '' : 's'}${j.shared_at ? ', last on ' + new Date(j.shared_at).toLocaleDateString('en-GB') : ''}.` : (owner ? 'Share sends the video itself to WhatsApp, Facebook and other apps.' : '')}</p></div>`;
+    const html = `<div class="card" id="share" style="margin-top:10px;gap:8px">
+${owner ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button type="button" id="b-wa" style="background:#1a9c4a">WhatsApp</button><button type="button" id="b-fb" style="background:#1877f2">Facebook</button></div>
+<button type="button" id="b-share">More…</button>` : ''}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><a class="btn sec" id="b-save" href="/api/jobs/${id}/video?dl=1" download="${esc(SKIN.id)}-${id}.mp4">Save to phone</a>
+${owner ? `<button type="button" class="sec" id="b-copy">Copy link</button>` : ''}</div>
+<p class="small" id="share-note" style="margin:0">${j.state === 'shared' ? `Shared ${j.share_count} time${j.share_count === 1 ? '' : 's'}${j.shared_at ? ', last on ' + new Date(j.shared_at).toLocaleDateString('en-GB') : ''}. ` : ''}${owner ? 'WhatsApp and Facebook send a link that plays the video. “More…” opens the phone's share menu and sends the video file itself.' : ''}</p></div>`;
     const script = `
 var ID=${id},TEXT=${JSON.stringify(text)},note=document.getElementById('share-note');
 function say(t){note.textContent=t;}
@@ -87,6 +88,15 @@ if(bs)bs.addEventListener('click',async function(){
     }else{say('This phone cannot open the share menu here. Use Save to phone or Copy link.');}
   }catch(e){say(e&&e.name==='AbortError'?'Sharing was cancelled.':'Could not share. Try Save to phone or Copy link.');}
   bs.disabled=false;});
+function openApp(btn,mk){btn.addEventListener('click',async function(){
+  btn.disabled=true;say('Opening…');
+  try{var u=await getLink();var t=TEXT+' '+u;await mark();location.href=mk(u,t);say('Opened. Come back here when you have posted it.');}
+  catch(e){say('Could not open it. Try Share video or Copy link.');}
+  btn.disabled=false;});}
+var bw=document.getElementById('b-wa');
+if(bw)openApp(bw,function(u,t){return 'intent://send?text='+encodeURIComponent(t)+'#Intent;scheme=whatsapp;package=com.whatsapp;S.browser_fallback_url='+encodeURIComponent('https://wa.me/?text='+encodeURIComponent(t))+';end';});
+var bf=document.getElementById('b-fb');
+if(bf)openApp(bf,function(u){return 'https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(u);});
 var bc=document.getElementById('b-copy');
 if(bc)bc.addEventListener('click',async function(){
   try{var u=await getLink();

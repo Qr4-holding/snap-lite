@@ -349,10 +349,10 @@ async function phase6() {
   const id = await mk(owner);
   const pre = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
   ok('no link can be made before approval', pre.status === 409);
-  ok('a not-yet-approved job has no share buttons', !/Share video/.test((await req(owner, 'GET', `/jobs/${id}`)).text));
+  ok('a not-yet-approved job has no share buttons', !/id="b-share"/.test((await req(owner, 'GET', `/jobs/${id}`)).text));
   ok('owner approves', (await req(owner, 'POST', `/api/jobs/${id}/approve`, { json: {}, ...A })).status === 200);
   const page = (await req(owner, 'GET', `/jobs/${id}`)).text;
-  ok('approved job shows Share video, Save to phone and Copy link', /Share video/.test(page) && /Save to phone/.test(page) && /Copy link/.test(page) && /navigator\.canShare/.test(page));
+  ok('approved job shows WhatsApp, Facebook, More…, Save to phone and Copy link', /id="b-share"/.test(page) && /Save to phone/.test(page) && /Copy link/.test(page) && /id="b-wa"/.test(page) && /id="b-fb"/.test(page) && /navigator\.canShare/.test(page));
   const dl = await fetch(`${BASE}/api/jobs/${id}/video?dl=1`, { headers: { cookie: owner.cookie } });
   ok('Save to phone downloads the mp4', dl.status === 200 && /attachment/.test(dl.headers.get('content-disposition') || '') && /video\/mp4/.test(dl.headers.get('content-type')));
   const lk = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
@@ -379,7 +379,7 @@ async function phase6() {
   const pg2 = (await req(owner, 'GET', `/jobs/${id}`)).text;
   ok('the screen shows how many times it was shared', /Shared 2 times/.test(pg2));
   const ct = (await req(crew, 'GET', `/jobs/${id}`)).text;
-  ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/Share video/.test(ct) && !/Copy link/.test(ct));
+  ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/id="b-share"/.test(ct) && !/Copy link/.test(ct));
   const cid = await mk(crew);
   ok('crew cannot approve or share their own job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
   await req(owner, 'DELETE', `/api/jobs/${id}`);
