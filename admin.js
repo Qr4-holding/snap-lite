@@ -72,6 +72,15 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     res.redirect(303, '/admin?m=owner');
   } catch (e) { next(e); } });
 
+  app.post('/admin/owner-password', auth, sameOrigin, form, async (req, res, next) => { try {
+    const email = clean(req.body.email, 120).toLowerCase(), pw = String(req.body.password || '');
+    if (pw.length < 8) return res.status(400).json({ error: 'Password needs 8 or more characters.' });
+    const r = await pool.query("UPDATE users SET password_hash=$1 WHERE email=$2 AND role='owner' AND deleted_at IS NULL", [hashPw(pw), email]);
+    if (!r.rowCount) return res.status(404).json({ error: 'No such owner.' });
+    await pool.query('DELETE FROM biz_sessions WHERE user_id IN (SELECT id FROM users WHERE email=$1)', [email]);
+    res.json({ ok: true });
+  } catch (e) { next(e); } });
+
   app.post('/admin/keys', auth, sameOrigin, form, async (req, res, next) => { try {
     for (const k of ['elevenlabs_key', 'anthropic_key']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
     res.redirect(303, '/admin?m=keys');
