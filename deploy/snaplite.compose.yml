@@ -1,0 +1,64 @@
+# Snap Lite (SKIN=ekp11) + its own PostgreSQL, as deployed on the Hostinger VPS (Docker manager project "snaplite").
+# Project environment (set on the server only, never in this repo):
+#   DB_PASSWORD, ADMIN_PASSWORD, SITE_HOSTS (the domain Caddy serves), APP_VERSION, ANDROID_APK_URL (later),
+#   ELEVENLABS_API_KEY and ANTHROPIC_API_KEY (phase 5; or pasted at /admin/ai later)
+# Updating: push to main, then restart the project (the web container clones main on start).
+services:
+  web:
+    image: node:22-alpine
+    command: ["sh", "-c", "apk add --no-cache git ffmpeg python3 py3-pillow >/dev/null && rm -rf /app && git clone --depth 1 https://github.com/Qr4-holding/snap-lite.git /app && cd /app && npm install --omit=dev --no-audit --no-fund && exec node server.js"]
+    environment:
+      - NODE_ENV=production
+      - SKIN=ekp11
+      - DATABASE_URL=postgres://sl:${DB_PASSWORD}@db:5432/sl
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - APP_VERSION=${APP_VERSION:-0.1.0}
+      - ANDROID_APK_URL=${ANDROID_APK_URL:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - MEDIA_DIR=/data/media
+      - BACKUP_DIR=/backups
+    volumes:
+      - backups:/backups:ro
+      - media:/data/media
+    labels:
+      caddy: ${SITE_HOSTS}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+    networks:
+      - web
+      - internal
+    depends_on:
+      - db
+    restart: unless-stopped
+  backup:
+    image: postgres:17-alpine
+    environment:
+      - PGPASSWORD=${DB_PASSWORD}
+    command: ["sh", "-c", "sleep 30; while true; do pg_dump -h db -U sl sl | gzip > /backups/sl-$$(date +%Y-%m-%d).sql.gz && find /backups -name 'sl-*.sql.gz' -mtime +14 -delete; sleep 86400; done"]
+    volumes:
+      - backups:/backups
+    networks:
+      - internal
+    depends_on:
+      - db
+    restart: unless-stopped
+  db:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=sl
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=sl
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    restart: unless-stopped
+networks:
+  web:
+    external: true
+  internal: {}
+volumes:
+  pgdata: {}
+  backups: {}
+  media: {}

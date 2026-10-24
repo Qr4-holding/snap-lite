@@ -1,0 +1,8 @@
+node_modules
+skins/*/logo.png
+skins/*/icon.png
+skins/*/splash.png
+work
+out
+*.apk
+.env

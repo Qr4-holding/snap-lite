@@ -1,0 +1,33 @@
+{
+  "id": "ekp11",
+  "name": "EKP11 Waste Management",
+  "app_name": "EKP11 Snap",
+  "short_name": "EKP11",
+  "app_id": "uk.co.ekp11.snap",
+  "accent": "#018603",
+  "ink": "#1F2124",
+  "logo": "logo.png",
+  "tagline": "Skip the skip.",
+  "web": "ekp11.co.uk",
+  "phone": "0785 046 4204",
+  "email": "info@ekp11.co.uk",
+  "end_card": {
+    "headline": "See the job before you book.",
+    "button": "Get a free quote",
+    "hold_seconds": 5
+  },
+  "voices": [
+    { "id": "IosqM5LMIzqPfT0efhhy", "label": "Kerry" },
+    { "id": "T9bEpk4Va2Kpk1mZWay7", "label": "Darren (warm Northern male) TBC" }
+  ],
+  "job_types": ["House clearance", "Garden", "Garage", "Builders' waste", "Cardboard and packaging", "Commercial yard", "Other"],
+  "max_during": 3,
+  "orientation": "auto",
+  "spoken_name": "E K P eleven",
+  "script_rules": [
+    "Plain, specific, UK English. No digits, no pound signs.",
+    "Never use: best, cheapest, guaranteed, vetted, certified, number one, award.",
+    "No town or street names. Do not claim anything outside facts_allowed."
+  ],
+  "facts_allowed": []
+}
