@@ -5,5 +5,7 @@ skins/*/splash.png
 work
 out
 *.apk
+!apk/*.apk
+android/build-out
 .env
 __pycache__/

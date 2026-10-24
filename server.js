@@ -6,6 +6,7 @@ const fs = require('fs');
 const { Pool } = require('pg');
 const sharp = require('sharp');
 const SKIN = require('./lib/skin');
+const { esc } = require('./lib/util');
 const ui = require('./lib/ui')(SKIN);
 
 const PORT = process.env.PORT || 3000;
@@ -66,6 +67,27 @@ app.get('/manifest.json', (req, res) => res.set('Cache-Control', 'public, max-ag
 app.get('/sw.js', (req, res) => res.type('application/javascript').set({ 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' }).send(
   'self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",e=>{e.respondWith(fetch(e.request));});'));
 app.get('/robots.txt', (req, res) => res.type('text/plain').send('User-agent: *\nDisallow: /\n'));
+
+// ---------- install page (the only public page: no job data on it) ----------
+const APK = path.join(__dirname, 'apk', `${SKIN.id}-snap.apk`);
+app.get('/get/app.apk', (req, res) => fs.existsSync(APK)
+  ? res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': `attachment; filename="${SKIN.id}-snap.apk"`, 'Cache-Control': 'no-cache' }).sendFile(APK)
+  : res.status(404).type('text/plain').send('Not found'));
+app.get('/.well-known/assetlinks.json', (req, res) => { const f = path.join(__dirname, 'apk', 'assetlinks.json'); fs.existsSync(f) ? res.type('application/json').sendFile(f) : res.status(404).end(); });
+app.get('/get', (req, res) => {
+  const have = fs.existsSync(APK), mb = have ? (fs.statSync(APK).size / 1048576).toFixed(1) : '';
+  res.set('Cache-Control', 'no-cache').send(ui.page('Install the app', `
+<h1>Install ${SKIN.app_name || SKIN.name}</h1>
+${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${process.env.APP_VERSION || ''}.</p>
+<h2>Then, on your phone</h2>
+<ol style="padding-left:22px;display:grid;gap:10px">
+<li><b>Tap the download.</b> If Chrome says the file may be harmful, tap <b>Download anyway</b>. It is our own app.</li>
+<li>When it finishes, tap <b>Open</b>.</li>
+<li>Android asks to allow installs from Chrome: tap <b>Settings</b>, switch <b>Allow from this source</b> on, then press Back.</li>
+<li>Tap <b>Install</b>, then <b>Open</b>. Sign in with the email and password you were given.</li></ol>
+<p class="small">If a Play Protect box appears, tap <b>More details</b> then <b>Install anyway</b>.</p>` : '<p class="msg">The app file is not ready yet.</p>'}
+<h2>No download?</h2><p>Open <b>${esc(req.get('host'))}</b> in Chrome and use the menu <b>⋮</b> → <b>Add to Home screen</b>.</p>`, {}));
+});
 
 // ---------- modules ----------
 const acct = require('./accounts')({ app, pool, SKIN, ui, events });

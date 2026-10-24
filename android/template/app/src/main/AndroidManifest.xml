@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <application android:label="@NAME@" android:icon="@mipmap/ic_launcher" android:allowBackup="true" android:supportsRtl="true">
+    <meta-data android:name="asset_statements" android:resource="@string/asset_statements"/>
+    <meta-data android:name="web_manifest_url" android:value="https://@HOST@/manifest.json"/>
+    <activity android:name="com.google.androidbrowserhelper.trusted.LauncherActivity" android:alwaysRetainTaskState="true" android:exported="true" android:label="@NAME@">
+      <meta-data android:name="android.support.customtabs.trusted.DEFAULT_URL" android:value="https://@HOST@/"/>
+      <meta-data android:name="android.support.customtabs.trusted.STATUS_BAR_COLOR" android:resource="@color/accent"/>
+      <meta-data android:name="android.support.customtabs.trusted.NAVIGATION_BAR_COLOR" android:resource="@color/white"/>
+      <meta-data android:name="android.support.customtabs.trusted.FILE_PROVIDER_AUTHORITY" android:value="@APP_ID@.fileprovider"/>
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+      <intent-filter android:autoVerify="true"><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="https" android:host="@HOST@"/></intent-filter>
+    </activity>
+    <provider android:name="androidx.core.content.FileProvider" android:authorities="@APP_ID@.fileprovider" android:grantUriPermissions="true" android:exported="false">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/filepaths"/>
+    </provider>
+  </application>
+</manifest>

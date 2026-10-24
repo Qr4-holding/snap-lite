@@ -1,0 +1,5 @@
+// Maven Central through Google's mirror (the direct host is rate-limited from some networks)
+pluginManagement { repositories { google(); maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' } } }
+dependencyResolutionManagement { repositories { google(); maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' } } }
+rootProject.name = "snap"
+include ':app'
