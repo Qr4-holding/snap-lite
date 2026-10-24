@@ -22,7 +22,7 @@ short hold, wipe on to the full AFTER, hold it) -> end card. With a voice, the p
 the lines: line 1 plays over before/during, line 2 over the reveal, line 3 over the end card; captions follow the words.
 Every segment is a whole number of frames, and the finished file is checked: audio and video lengths equal to the frame.
 """
-import json, os, sys, re, subprocess
+import json, os, sys, re, subprocess, math
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from PIL import Image, ImageDraw
@@ -105,7 +105,7 @@ def reveal_segment(B, A, nf, out, W, H):
     p = encoder(W, H, out, nf)
     for k in range(nf):
         t = k / max(1, nf - 1)
-        if t < 0.45: x = int(W - (W // 2) * N.ease((t - 0.08) / 0.22))
+        if t < 0.45: x = int(W - (W // 2) * N.ease(t / 0.25))      # the wipe starts on the first frame, i.e. on the spoken word
         else: x = int((W // 2) * (1 - N.ease((t - 0.45) / 0.17)))
         fr = B.copy()
         if x < W: fr.paste(A.crop((x, 0, W, H)), (x, 0))
@@ -118,16 +118,23 @@ def reveal_segment(B, A, nf, out, W, H):
 
 def concat(files, out):
     lst = out + '.txt'; open(lst, 'w').write(''.join(f"file '{os.path.abspath(f)}'\n" for f in files))
-    E.run(['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', lst, '-c', 'copy', out]); os.remove(lst)
+    E.run(['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', lst, '-c:v', 'copy', '-an', out])   # video only: joining with the segments' audio shifts the picture by a frame; os.remove(lst)
 
 
 # ---------------------------------------------------------------- voice timing
-def line_cuts(lines):
-    """Where each line starts in the voice: halfway through the pause before it. Returns [start1, start2, start3, ...]."""
-    starts = [0.0]
-    for prev, cur in zip(lines, lines[1:]):
-        starts.append(round((prev['end'] + cur['start']) / 2, 3))
-    return starts
+def first_words(lines):
+    """Voice time of the first spoken word of each line, from the word timings. A line with no word timings falls back to the middle
+    of the pause before it. Returns [(seconds, 'word' | 'pause'), ...]."""
+    out = []
+    for i, ln in enumerate(lines[:3]):
+        w = ln.get('words') or []
+        if w: out.append((float(w[0][1]), 'word')); continue
+        st = float(ln.get('start') or 0.0)
+        if i > 0:
+            prev_end = float(lines[i - 1].get('end') or 0.0)
+            st = round((prev_end + st) / 2, 3) if st > prev_end else st
+        out.append((st, 'pause'))
+    return out
 
 
 def caption_cues(lines, offset):
@@ -176,14 +183,20 @@ def render(cfg):
     # ---- durations in whole frames
     cover_f = frames(COVER_S)
     hold_s = float(ec.get('hold_seconds', 5))
+    shift = 0.0; fw = []; timing = []
     if voice and len(lines) >= 3:
-        cuts = line_cuts(lines)                                     # line starts in the voice
-        mid = frames(max(len(during) + 1, 1) * 1.4)                 # never shorter than 1.4 s per photo
-        first_end = max(frames(cuts[1]), mid)                       # before + during end where line 2 starts
-        reveal_f = max(frames(MIN_REVEAL_S), frames(cuts[2]) - first_end)
-        end_f = max(frames(hold_s), frames(vdur - cuts[2] + 0.8) if vdur - cuts[2] + 0.8 > 0 else 0)
+        fw = first_words(lines)
+        shift = COVER_S - fw[0][0]                                  # the first word of line 1 lands exactly where the BEFORE photo starts
+        c2 = round((fw[1][0] + shift) * FPS); c3 = round((fw[2][0] + shift) * FPS)   # frame numbers of the cuts to line 2 and line 3
         n_still = 1 + len(during)
+        while n_still > 1 and (c2 - cover_f) < 15 * n_still: n_still -= 1; during = during[:n_still - 1]   # no photo shorter than 0.6 s
+        first_end = max(c2 - cover_f, 8)
+        reveal_f = max(c3 - c2, 20)
+        end_f = max(frames(hold_s), math.ceil((vdur + shift + 0.8) * FPS) - (cover_f + first_end + reveal_f))
         each = [first_end // n_still + (1 if i < first_end % n_still else 0) for i in range(n_still)]
+        for k, (t, src) in enumerate(fw):
+            cut_f = (cover_f, cover_f + first_end, cover_f + first_end + reveal_f)[k]
+            timing.append({'line': k + 1, 'first_word_s': round(t + shift, 3), 'cut_s': round(cut_f / FPS, 3), 'err_ms': round(abs(cut_f / FPS - (t + shift)) * 1000, 1), 'source': src})
     else:
         each = [frames(BEFORE_S)] + [frames(DURING_S)] * len(during)
         reveal_f = frames(REVEAL_S); end_f = frames(hold_s)
@@ -209,17 +222,18 @@ def render(cfg):
     cues = []
     if voice and lines:
         end_of_pictures = (cover_f + sum(each) + reveal_f) / FPS
-        cues = [c for c in caption_cues(lines[:2], COVER_S) if c[0] < end_of_pictures]       # the closing line is on the end card itself
+        cues = [c for c in caption_cues(lines[:2], shift if fw else COVER_S) if c[0] < end_of_pictures]       # the closing line is on the end card itself
     nin = 1; filt = []; last = '0:v'
     if voice: cmd += ['-i', voice]; nin = 2
+    else: cmd += ['-f', 'lavfi', '-t', f'{total:.4f}', '-i', f'anullsrc=r={SR}:cl=stereo']; nin = 2
     for k, (a, b, text) in enumerate(cues):
         cp = os.path.join(work, f'cap{k}.png'); x, y = E.caption_png(text, fmt, cp)
         cmd += ['-i', cp]; filt.append(f"[{last}][{nin + k}:v]overlay={x}:{y}:enable='between(t,{a:.3f},{b:.3f})'[o{k}]"); last = f'o{k}'
     if voice:
-        filt.append(f'[1:a]adelay={int(COVER_S * 1000)}:all=1,aresample={SR},loudnorm=I=-16:TP=-1.5:LRA=11,aresample={SR},apad=whole_dur={total:.3f},atrim=end={total:.3f}[a]')
+        filt.append(f'[1:a]atrim=start={fw[0][0] if fw else 0:.3f},asetpts=PTS-STARTPTS,adelay={int(COVER_S * 1000)}:all=1,aresample={SR},loudnorm=I=-16:TP=-1.5:LRA=11,aresample={SR},apad=whole_dur={total:.3f},atrim=end={total:.3f}[a]')
     if filt: cmd += ['-filter_complex', ';'.join(filt)]
     cmd += ['-map', f'[{last}]' if cues else '0:v']
-    cmd += ['-map', '[a]'] if voice else ['-map', '0:a']
+    cmd += ['-map', '[a]'] if voice else ['-map', '1:a']
     cmd += (ENC if cues else ['-c:v', 'copy']) + ['-c:a', 'aac', '-b:a', '160k', '-ar', str(SR), '-ac', '2', '-t', f'{total:.3f}', '-movflags', '+faststart', cfg['out']]
     E.run(cmd)
 
@@ -232,11 +246,13 @@ def render(cfg):
     vd, ad = probe('v', 'duration'), probe('a', 'duration')
     size = E.run(['ffprobe', '-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', cfg['out']]).stdout.strip()
     errs = []
+    for t in timing:
+        if t['err_ms'] > 40 and t['source'] == 'word': errs.append(f"cut to line {t['line']} is {t['err_ms']} ms from its first word")
     if abs(vd - ad) > 1.0 / FPS + 1e-3: errs.append(f'audio {ad:.3f}s and video {vd:.3f}s differ by more than one frame')
     if abs(vd - total) > 1.0 / FPS + 1e-3: errs.append(f'length {vd:.3f}s, planned {total:.3f}s')
     if size != f'{W},{H}': errs.append(f'size {size}, expected {W}x{H}')
     result = {'ok': not errs, 'duration': round(vd, 3), 'audio': round(ad, 3), 'size': f'{W}x{H}', 'orientation': 'portrait' if portrait else 'landscape',
-              'cuts_s': [round(x / FPS, 2) for x in (cover_f, cover_f + sum(each[:1]), cover_f + sum(each), cover_f + sum(each) + reveal_f)], 'errors': errs}
+              'cuts_s': [round(x / FPS, 2) for x in (cover_f, cover_f + sum(each[:1]), cover_f + sum(each), cover_f + sum(each) + reveal_f)], 'timing': timing, 'errors': errs}
     for f in segs + [joined]:
         try: os.remove(f)
         except OSError: pass

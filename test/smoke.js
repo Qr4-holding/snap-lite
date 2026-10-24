@@ -333,6 +333,13 @@ async function phase5() {
     const f = await fetchVideo(vid), vd = dur(f, 'v'), ad = dur(f, 'a');
     ok('voiced video: audio and video lengths equal within one frame', Math.abs(vd - ad) <= 0.0401, `${ad} ${vd}`);
     ok('voiced video is longer than the silent one and has speech at about -16 LUFS', vd > 6 && (() => { const l = lufs(f); console.log('   loudness', l); return l !== null && l > -19 && l < -13; })());
+    const tm = (await req(owner, 'GET', `/api/jobs/${vid}/timing`)).json().timing || [];
+    ok('the render report puts every cut within 40 ms of its line\'s first spoken word', tm.length === 3 && tm.every(t => t.err_ms <= 40 && t.source === 'word'), JSON.stringify(tm));
+    const cc = spawnSync('python3', [path.join(__dirname, 'cuts_check.py'), f, String(tm[1] && tm[1].first_word_s), String(tm[2] && tm[2].first_word_s)], { encoding: 'utf8' });
+    console.log('   ' + (cc.stdout || '').trim().split('\n').join('\n   '));
+    ok('measured in the finished video: the picture cut to lines 2 and 3 is within 40 ms of the first word', cc.status === 0, cc.stdout + cc.stderr);
+    const on = [...(cc.stdout || '').matchAll(/audio onset [\d.]+ \((\d+) ms from the cut\)/g)].map(m => +m[1]);
+    ok('and the audible speech starts within 120 ms of each cut', on.length === 2 && on.every(x => x <= 120), JSON.stringify(on));
     const g1 = (await usage()).voice_generations;
     ok('one voice generation for the whole video', g1 === g0 + 1, `${g0} -> ${g1}`);
     await req(owner, 'POST', `/jobs/${vid}/voice`, { body: form(lines5) });
