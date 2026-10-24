@@ -64,7 +64,7 @@ module.exports = function lines(SKIN, secrets) {
           const rules = (SKIN.script_rules || []).join(' ');
           const r = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-            body: JSON.stringify({ model: process.env.DRAFT_MODEL || 'claude-haiku-5-5', max_tokens: 200, temperature: 0.9,
+            body: JSON.stringify({ model: process.env.DRAFT_MODEL || 'claude-haiku-5-5', max_tokens: 200,
               system: `You write three short spoken lines for a before-and-after video made by ${SKIN.name}, a UK waste removal company. Line 1 introduces the BEFORE photo. Line 2 introduces the AFTER photo. Line 3 is the sign-off and must say "${name}" and "${SKIN.tagline || ''}". Each line is under 12 words. ${rules} Do not mention prices, places, speed, quality claims, or anything not shown in a photo. Reply with exactly three lines separated by blank lines, nothing else.`,
               messages: [{ role: 'user', content: `Job type: ${type || 'General'}. Write the three lines.` }] }), signal: AbortSignal.timeout(20000) });
           if (!r.ok) throw new Error('draft ' + r.status);

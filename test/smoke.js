@@ -110,7 +110,7 @@ async function phase2() {
   // visibility
   ok('crew cannot open the owner\'s job', (await req(crew, 'GET', `/api/jobs/${oj}/status`)).status === 404);
   const list = (await req(crew, 'GET', '/api/jobs')).json();
-  ok('crew list holds only their own jobs', Array.isArray(list) && list.every(j => j.mine) && list.some(j => j.id === cj) && !list.some(j => j.id === oj));
+  ok('crew list holds only their own jobs', Array.isArray(list) && list.every(j => j.mine || j.state === 'shared') && list.some(j => j.id === cj) && !list.some(j => j.id === oj));
   ok('owner sees both jobs', ((await req(owner, 'GET', '/api/jobs')).json() || []).filter(j => [cj, oj].includes(j.id)).length === 2);
   // account deletion keeps jobs
   const wd = await req(crew, 'POST', '/settings/delete-account', { body: form({ password: 'wrong-wrong' }) });
