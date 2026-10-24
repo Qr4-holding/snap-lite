@@ -91,6 +91,18 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
     res.set({ 'Cache-Control': 'private, max-age=3600', 'Content-Type': 'image/jpeg' }); fs.createReadStream(f).on('error', () => res.status(404).end()).pipe(res);
   } catch (e) { next(e); } });
 
+  // remove one photo from a draft (the capture screen's Remove button)
+  app.delete('/api/jobs/:id/photos/:kind/:seq', sameOrigin, needUser({ json: true }), async (req, res, next) => { try {
+    const j = await getJob(req.user, req.params.id);
+    if (!j || !canEdit(req.user, j)) return res.status(404).json({ error: 'Job not found.' });
+    const { kind, seq } = req.params;
+    if (!['before', 'during', 'after'].includes(kind) || !/^\d$/.test(seq)) return res.status(404).json({ error: 'Photo not found.' });
+    await pool.query('DELETE FROM job_photos WHERE job_id=$1 AND kind=$2 AND seq=$3', [j.id, kind, +seq]);
+    for (const f of [`${kind}${seq}.jpg`, `${kind}${seq}_t.jpg`]) fs.rm(path.join(dirOf(j.id), f), { force: true }, () => {});
+    events('photo_removed', req.user.id, j.id, `${kind}${seq}`);
+    res.json({ ok: true });
+  } catch (e) { next(e); } });
+
   app.get('/api/jobs/:id/status', needUser({ json: true }), async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: 'Job not found.' });
@@ -177,7 +189,7 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">No jobs yet. Tap 
     if (!canEdit(req.user, j)) return res.redirect(303, `/jobs/${j.id}`);
     const photos = await photosOf(j.id);
     const CFG = { id: j.id, maxDuring: SKIN.max_during, photos: photos.map(p => ({ kind: p.kind, seq: p.seq })), version: Date.now() };
-    const slot = (kind, seq, label, cls) => `<div class="shot ${cls}" data-kind="${kind}" data-seq="${seq}" role="button" tabindex="0" aria-label="${label} photo"><span class="tag">${label}</span><span class="hint">Tap to add</span><span class="st" hidden></span></div>`;
+    const slot = (kind, seq, label, cls) => `<div class="shot ${cls}" data-kind="${kind}" data-seq="${seq}" role="button" tabindex="0" aria-label="${label} photo"><span class="tag">${label}</span><span class="hint">Tap to add</span><span class="st" hidden></span><span class="acts"><button type="button" class="small sec retake">Retake</button><button type="button" class="small bad remove">Remove</button></span></div>`;
     const slots = slot('before', 0, 'BEFORE', 'before') + Array.from({ length: SKIN.max_during }, (_, i) => slot('during', i, SKIN.max_during > 1 ? `DURING ${i + 1}` : 'DURING', 'during') ).join('') + slot('after', 0, 'AFTER', 'after');
     res.set('Cache-Control', 'no-store').send(page('Photos', `
 <h1>${esc(j.job_type || 'Job')}</h1>
@@ -195,13 +207,24 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">No jobs yet. Tap 
   // browser side of the capture screen: live camera with a ghost of the BEFORE photo for AFTER, gallery import, one request per photo with retries
   const CAPTURE_JS = `(function(){
 var CFG=__CFG__, $=function(s){return document.querySelector(s)}, slots={}, cur=null, stream=null;
-document.querySelectorAll('.shot').forEach(function(el){ slots[el.dataset.kind+el.dataset.seq]=el; el.addEventListener('click',function(){ open(el); }); el.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(el);} }); });
+document.querySelectorAll('.shot').forEach(function(el){ slots[el.dataset.kind+el.dataset.seq]=el;
+  el.querySelector('.retake').addEventListener('click',function(e){ e.stopPropagation(); open(el); });
+  el.querySelector('.remove').addEventListener('click',function(e){ e.stopPropagation(); if(!confirm('Remove this photo?')) return; remove(el); }); el.addEventListener('click',function(){ open(el); }); el.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(el);} }); });
 function url(k,s){ return '/api/jobs/'+CFG.id+'/photos/'+k+'/'+s+'?t=1&v='+CFG.version; }
 function mark(k,s,u){ var el=slots[k+s]; if(!el) return; el.classList.add('has'); el.classList.remove('err'); el.style.backgroundImage="url('"+u+"')"; var h=el.querySelector('.hint'); if(h) h.hidden=true; }
 CFG.photos.forEach(function(p){ mark(p.kind,p.seq,url(p.kind,p.seq)); });
 function status(el,t,bad){ var st=el.querySelector('.st'); st.hidden=!t; st.textContent=t||''; el.classList.toggle('err',!!bad); }
 function note(){ var b=CFG.photos.some(function(p){return p.kind==='before'}), a=CFG.photos.some(function(p){return p.kind==='after'}); $('#note').textContent=(b&&a)?'Before and after saved. You can add during photos or finish.':(b?'Now the AFTER photo.':''); $('#done').setAttribute('aria-disabled',(b&&a)?'false':'true'); }
 $('#done').addEventListener('click',function(e){ if($('#done').getAttribute('aria-disabled')==='true'){ e.preventDefault(); $('#note').textContent='Add at least a BEFORE and an AFTER photo first.'; } });
+function remove(el){
+  var k=el.dataset.kind, s=+el.dataset.seq; status(el,'Removing…');
+  fetch('/api/jobs/'+CFG.id+'/photos/'+k+'/'+s,{method:'DELETE',credentials:'same-origin'}).then(function(r){
+    if(r.status===401){ location.href='/login'; return; }
+    if(!r.ok){ status(el,'Could not remove. Try again.',true); return; }
+    CFG.photos=CFG.photos.filter(function(p){return !(p.kind===k&&p.seq===s)});
+    el.classList.remove('has','err'); el.style.backgroundImage=''; var h=el.querySelector('.hint'); if(h) h.hidden=false; status(el,''); note();
+  }).catch(function(){ status(el,'No signal. Try again.',true); });
+}
 function open(el){ cur=el; $('#menu').hidden=false; }
 $('#mX').onclick=function(){ $('#menu').hidden=true; };
 $('#mGal').onclick=function(){ $('#menu').hidden=true; $('#gal').value=''; $('#gal').click(); };

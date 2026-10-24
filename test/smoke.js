@@ -196,6 +196,16 @@ async function phase3(ctx) {
   let s4 = (await req(owner, 'GET', `/api/jobs/${id4}/status`)).json();
   ok('after a dropped upload the other photos are intact and the cut-off one is absent', s4.photos.length === 2 && !s4.photos.some(p => p.kind === 'during' && p.seq === 1), JSON.stringify(s4.photos));
   ok('retrying the dropped photo works', (await upload(owner, id4, 'during', 1, await jpeg(1200, 1600))).status === 200 && (await req(owner, 'GET', `/api/jobs/${id4}/status`)).json().photos.length === 3);
+  // remove a wrong photo from a draft
+  const idr = await J('Garden');
+  await upload(owner, idr, 'before', 0, await jpeg(1200, 1600)); await upload(owner, idr, 'during', 0, await jpeg(1200, 1600, { shade: 20 }));
+  const cap2 = (await req(owner, 'GET', `/jobs/${idr}/capture`)).text;
+  ok('each photo slot has Retake and Remove buttons', /class="small sec retake"/.test(cap2) && /class="small bad remove"/.test(cap2));
+  const rmv = await req(owner, 'DELETE', `/api/jobs/${idr}/photos/during/0`);
+  ok('Remove deletes the photo', rmv.status === 200 && (await req(owner, 'GET', `/api/jobs/${idr}/status`)).json().photos.every(p => p.kind !== 'during'));
+  ok('the removed photo is gone from the server', (await fetch(`${BASE}/api/jobs/${idr}/photos/during/0?t=1`, { headers: { cookie: owner.cookie } })).status === 404);
+  ok('a slot can be refilled after removing', (await upload(owner, idr, 'during', 0, await jpeg(1200, 1600, { shade: 30 }))).status === 200);
+  ok('removing needs a session', (await fetch(`${BASE}/api/jobs/${idr}/photos/before/0`, { method: 'DELETE' })).status === 401);
   // privacy
   ok('photos need a session', (await fetch(`${BASE}/api/jobs/${id}/photos/before/0`)).status === 401);
   const ph = await fetch(`${BASE}/api/jobs/${id}/photos/before/0?t=1`, { headers: { cookie: owner.cookie } });
