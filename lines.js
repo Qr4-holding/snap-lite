@@ -59,17 +59,18 @@ module.exports = function lines(SKIN, secrets) {
   async function draft(type) {
     const key = await secrets.get('anthropic_key');
     if (key) {
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const rules = (SKIN.script_rules || []).join(' ');
           const r = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-            body: JSON.stringify({ model: process.env.DRAFT_MODEL || 'claude-haiku-5-5', max_tokens: 200,
-              system: `You write three short spoken lines for a before-and-after video made by ${SKIN.name}, a UK waste removal company. Line 1 introduces the BEFORE photo. Line 2 introduces the AFTER photo. Line 3 is the sign-off and must say "${name}" and "${SKIN.tagline || ''}". Each line is under 12 words. ${rules} Do not mention prices, places, speed, quality claims, or anything not shown in a photo. Reply with exactly three lines separated by blank lines, nothing else.`,
+            body: JSON.stringify({ model: process.env.DRAFT_MODEL || 'claude-haiku-5-5', max_tokens: 1500, thinking: { type: 'disabled' },
+              system: `You write three short spoken lines for a before-and-after video made by ${SKIN.name}, a UK waste removal company. Line 1 introduces the BEFORE photo. Line 2 introduces the AFTER photo. Line 3 is the sign-off and must say "${name}" and "${SKIN.tagline || ''}". Each line is at most 10 words, one sentence, plain words. ${rules} Do not mention prices, places, speed, quality claims, or anything not shown in a photo. Reply with exactly three lines, one per row, nothing else: no numbering, no quotes.`,
               messages: [{ role: 'user', content: `Job type: ${type || 'General'}. Write the three lines.` }] }), signal: AbortSignal.timeout(20000) });
           if (!r.ok) throw new Error('draft ' + r.status);
-          const txt = ((await r.json()).content || []).map(c => c.text || '').join('').trim();
-          const arr = txt.split(/\n\s*\n/).map(s => s.replace(/^\s*(line\s*\d\s*[:.-]\s*|\d[.)]\s*)/i, '').trim()).filter(Boolean);
+          const jr = await r.json(); const txt = (jr.content || []).map(c => c.text || '').join('').trim(); if (process.env.DRAFT_DEBUG && !txt) console.error('EMPTY', JSON.stringify(jr).slice(0, 300));
+          const arr = txt.split(/\n+/).map(s => s.replace(/^\s*(line\s*\d\s*[:.-]\s*|\d[.)]\s*)/i, '').trim()).map(s => s.replace(/^["'“]|["'”]$/g, '').trim()).filter(Boolean);
+          if (process.env.DRAFT_DEBUG) console.error(JSON.stringify(arr), JSON.stringify(sanitize(arr).notes));
           if (arr.length === 3 && sanitize(arr).ok) return { lines: arr, source: 'claude' };
         } catch (e) { console.error('draft failed:', e.message); }
       }
