@@ -184,7 +184,7 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">No jobs yet. Tap 
 <p class="small">Take the BEFORE photo first. For AFTER, stand in the same spot: a faint outline of the before photo helps you line it up. During photos are optional. Each photo saves as you take it.</p>
 <div class="shots" id="shots">${slots}</div>
 <p id="note" class="small"></p>
-<div style="display:grid;gap:10px;margin-top:14px"><a class="btn" id="done" href="/jobs/${j.id}" aria-disabled="true">Done: save job</a></div>
+<div style="display:grid;gap:10px;margin-top:14px"><a class="btn" id="done" href="/jobs/${j.id}/voice" aria-disabled="true">Done: save job</a></div>
 <input type="file" id="gal" accept="image/*" hidden>
 <input type="file" id="cap" accept="image/*" capture="environment" hidden>
 <div id="menu" class="cam" hidden style="grid-template-rows:1fr auto;background:rgba(0,0,0,.6)"><div></div><div class="bar" style="flex-direction:column;background:#fff;padding:16px;border-radius:18px 18px 0 0"><button id="mCam">Take photo</button><button class="sec" id="mGal">Choose from gallery</button><button class="sec" id="mX">Cancel</button></div></div>
@@ -257,10 +257,10 @@ note();
 ${busy}${fail}${player}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:16px">
-${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<form method="post" action="/jobs/${j.id}/render"><button type="submit">${j.state === 'failed' ? 'Try again' : 'Make video'}</button></form>` : ''}
+${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<a class="btn" href="/jobs/${j.id}/voice">${j.state === 'failed' ? 'Try again' : 'Choose voice and make video'}</a>` : ''}
 ${canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Add or retake photos</a>` : ''}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve"><button type="submit">Approve</button></form>` : ''}
-${mine && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/render"><button class="sec" type="submit">Make it again</button></form>` : ''}
+${mine && j.state === 'ready' ? `<a class="btn sec" href="/jobs/${j.id}/voice">Change voice or lines</a>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
 ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
 <a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll }));

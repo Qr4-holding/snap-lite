@@ -7,7 +7,7 @@ const { clean, esc, hashPw, sameOrigin } = require('./lib/util');
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/backups';
 
-module.exports = function admin({ app, pool, SKIN, acct, jobsMod }) {
+module.exports = function admin({ app, pool, SKIN, acct, jobsMod, secrets }) {
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   let ADMIN_USER = process.env.ADMIN_USER || 'admin';
   const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -49,10 +49,11 @@ table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px
 <nav><a href="/admin">Overview</a><a href="/admin/jobs">All jobs</a></nav>${body}</body></html>`;
 
   app.get('/admin', auth, async (req, res, next) => { try {
+    const keyState = { el: await secrets.has('elevenlabs_key'), an: await secrets.has('anthropic_key') };
     const b = (await pool.query('SELECT * FROM businesses WHERE slug=$1', [SKIN.id])).rows[0];
     const users = b ? (await pool.query('SELECT id,email,role,created_at,deleted_at FROM users WHERE biz_id=$1 ORDER BY id', [b.id])).rows : [];
     const counts = (await pool.query('SELECT state, count(*)::int n FROM jobs GROUP BY state ORDER BY state')).rows;
-    const flash = { owner: ['Owner created.', 0], bad: [req.query.why || 'Not saved.', 1], pw: ['Sign-in details saved. Use them next time.', 0], pwbad: ['Not saved: wrong current password, or the new passwords do not match or are under 12 characters.', 1], purged: ['Test data removed.', 0] }[req.query.m];
+    const flash = { owner: ['Owner created.', 0], bad: [req.query.why || 'Not saved.', 1], pw: ['Sign-in details saved. Use them next time.', 0], pwbad: ['Not saved: wrong current password, or the new passwords do not match or are under 12 characters.', 1], purged: ['Test data removed.', 0], keys: ['Keys saved.', 0] }[req.query.m];
     res.set('Cache-Control', 'no-store').send(shell('Overview', `<h1>${esc(SKIN.name)} admin</h1>
 ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
 <h2>Business</h2><p>${b ? `${esc(b.name)} (${esc(b.slug)})` : 'Not created yet: it is created with the first owner.'} · version ${esc(process.env.APP_VERSION || 'dev')}</p>
@@ -61,6 +62,7 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
 <h2>Jobs by state</h2><p>${counts.map(c => `${esc(c.state)}: ${c.n}`).join(' · ') || 'No jobs yet.'}</p>
 <h2>Backups</h2><ul>${listBackups().map(f => `<li><a href="/admin/backup/${esc(f)}">${esc(f)}</a></li>`).join('') || '<li>The first backup appears after tonight.</li>'}</ul>
 <h2>Sign-in details</h2><form class="card" method="post" action="/admin/password"><label>Username<input name="user" value="${esc(ADMIN_USER)}" required minlength="3"></label><label>Current password<input name="current" type="password" required autocomplete="current-password"></label><label>New password (12 or more, blank keeps current)<input name="next" type="password" minlength="12" autocomplete="new-password"></label><label>New password again<input name="again" type="password" minlength="12" autocomplete="new-password"></label><button type="submit">Save</button></form>
+<h2>Voice and writing keys</h2><p class="small">ElevenLabs: ${keyState.el ? 'set' : 'not set'} · Anthropic: ${keyState.an ? 'set' : 'not set'}. Pasted keys are stored on the server and never shown again; leave a box blank to keep the current key.</p><form class="card" method="post" action="/admin/keys"><label>ElevenLabs API key<input name="elevenlabs_key" type="password" autocomplete="off"></label><label>Anthropic API key<input name="anthropic_key" type="password" autocomplete="off"></label><button type="submit">Save keys</button></form>
 <h2>Test data</h2><form method="post" action="/admin/purge-test" onsubmit="return confirm('Remove test accounts and their jobs?')"><button class="del" type="submit">Remove test accounts (@snaplite-test.invalid)</button></form>`));
   } catch (e) { next(e); } });
 
@@ -70,6 +72,14 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     res.redirect(303, '/admin?m=owner');
   } catch (e) { next(e); } });
 
+  app.post('/admin/keys', auth, sameOrigin, form, async (req, res, next) => { try {
+    for (const k of ['elevenlabs_key', 'anthropic_key']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
+    res.redirect(303, '/admin?m=keys');
+  } catch (e) { next(e); } });
+  app.get('/admin/usage', auth, async (req, res, next) => { try {
+    const q = async t => +(await pool.query('SELECT count(*)::int n FROM events WHERE type=$1', [t])).rows[0].n;
+    res.set('Cache-Control', 'no-store').json({ voice_generations: await q('tts_generated'), lines_drafted: await q('lines_drafted'), keys: { elevenlabs: await secrets.has('elevenlabs_key'), anthropic: await secrets.has('anthropic_key') } });
+  } catch (e) { next(e); } });
   app.get('/admin/jobs', auth, async (req, res, next) => { try {
     const rows = (await pool.query(`SELECT j.*, u.email, (SELECT count(*)::int FROM job_photos p WHERE p.job_id=j.id) photos FROM jobs j LEFT JOIN users u ON u.id=j.user_id ORDER BY j.created_at DESC LIMIT 300`)).rows;
     res.set('Cache-Control', 'no-store').send(shell('Jobs', `<h1>All jobs</h1><table><tr><th>#</th><th>Type</th><th>By</th><th>State</th><th>Photos</th><th>Error</th></tr>${rows.map(r => `<tr><td>${r.id}</td><td>${esc(r.job_type)}</td><td>${esc(r.email || '')}</td><td>${esc(r.state)}</td><td>${r.photos}</td><td>${esc(r.render_error || '')}</td></tr>`).join('') || '<tr><td colspan="6">No jobs.</td></tr>'}</table>`));

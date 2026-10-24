@@ -92,8 +92,12 @@ ${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download t
 // ---------- modules ----------
 const acct = require('./accounts')({ app, pool, SKIN, ui, events });
 const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events });
-const renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events });
-const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod });
+const secrets = require('./lib/secrets')(pool);
+const linesMod = require('./lines')(SKIN, secrets);
+let voiceMod, renderMod;
+renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod });
+voiceMod = require('./voice')({ app, pool, SKIN, ui, acct, jobsMod, getRender: () => renderMod, events, secrets, linesMod });
+const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets });
 
 app.use((req, res) => res.status(404).type('text/plain').send('Not found'));
 process.on('unhandledRejection', e => console.error('Unhandled:', e && e.message));

@@ -1,5 +1,5 @@
 // Smoke tests that run against ANY running server (local or deployed):
-//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|all]
+//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|phase5|all]
 // Phase 2 and 3 create throw-away accounts @snaplite-test.invalid and remove them at the end.
 const http = require('http');
 const sharp = require('sharp');
@@ -273,6 +273,68 @@ async function phase4() {
   ok('health still fine after renders', (await (await fetch(BASE + '/health')).json()).ok === true);
 }
 
+async function phase5() {
+  console.log('\n== Phase 5: voice and lines ==');
+  const { execFileSync, spawnSync } = require('child_process'); const fs = require('fs'), os = require('os'), path = require('path');
+  const e = `owner5-${RUN}${TEST}`, pw = 'Owner-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ email: e, password: pw, name: 'T' }) });
+  const owner = (await login(e, pw)).p;
+  const J = async type => (await req(owner, 'POST', '/api/jobs', { json: { job_type: type }, headers: { accept: 'application/json' } })).json().id;
+  const jr = (id, path_, body) => req(owner, 'POST', `/api/jobs/${id}/${path_}`, { json: body || {}, headers: { accept: 'application/json' } });
+  const usage = async () => (await req(admin(), 'GET', '/admin/usage')).json();
+  const dir = process.env.PHOTO_DIR, real = n => dir && fs.existsSync(path.join(dir, n)) ? fs.readFileSync(path.join(dir, n)) : null;
+  const wait = async id => { for (let i = 0; i < 300; i += 3) { const s = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') return s; await new Promise(r => setTimeout(r, 3000)); } return { state: 'timeout' }; };
+  const fetchVideo = async id => { const r = await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: owner.cookie } }); const f = path.join(os.tmpdir(), `sl5-${RUN}-${id}.mp4`); fs.writeFileSync(f, Buffer.from(await r.arrayBuffer())); return f; };
+  const dur = (f, st) => parseFloat(execFileSync('ffprobe', ['-v', 'error', '-select_streams', st, '-show_entries', 'stream=duration', '-of', 'csv=p=0', f]).toString().trim() || 0);
+  const lufs = f => { const r = spawnSync('ffmpeg', ['-i', f, '-af', 'ebur128', '-f', 'null', '-'], { encoding: 'utf8' }); const m = [...(r.stderr || '').matchAll(/I:\s+(-?[\d.]+) LUFS/g)]; return m.length ? parseFloat(m[m.length - 1][1]) : null; };
+  const types = ['House clearance', 'Garden', 'Garage', "Builders' waste", 'Cardboard and packaging', 'Commercial yard', 'Other'];
+  const BAD = /\d|£|\b(best|cheapest|guaranteed|vetted|certified|number one|award)\b/i;
+  let allGood = true, srcs = new Set();
+  for (let i = 0; i < 10; i++) {
+    const id = await J(types[i % types.length]); const d = (await jr(id, 'lines/draft')).json();
+    const chk = (await jr(id, 'lines', { lines: d.lines, voice: 'none' })).json();
+    srcs.add(d.source);
+    if (!(d.lines && d.lines.length === 3 && d.lines.every(l => l && l.split(/\s+/).length < 12 && !BAD.test(l.replace(/EKP11/g, ''))) && chk.ok)) { allGood = false; console.log('   bad draft:', JSON.stringify(d)); }
+  }
+  ok('ten job types each give three lines that pass the filter (' + [...srcs].join('/') + ')', allGood);
+  const bid = await J('Garden');
+  const bad = (await jr(bid, 'lines', { lines: ['The best garden clearance for £50 in Leeds.', 'Cleared in 3 days, fully insured.', 'EKP11. Skip the skip.'], voice: 'none' })).json();
+  const why = JSON.stringify(bad.removed || []);
+  ok('a line with "best" or a price is cleaned and explained', bad.ok === false && /best/.test(why) && /£50/.test(why) && /prices/.test(why) && !BAD.test(bad.lines.join(' ').replace(/EKP11/g, '')), why);
+  ok('numbers, claims and place names are explained too', /3/.test(why) && /insured/.test(why) && /Leeds/.test(why));
+  const vs = (await req(owner, 'GET', `/jobs/${bid}/voice`)).text;
+  ok('the voice screen offers the voices, No voice and three editable lines', /Kerry/.test(vs) && /No voice/.test(vs) && /name="line3"/.test(vs));
+  // silent video
+  const sid = await J('Commercial yard');
+  await upload(owner, sid, 'before', 0, real('before.jpg') || await jpeg(1200, 1600)); await upload(owner, sid, 'after', 0, real('after.jpg') || await jpeg(1200, 1600, { shade: 50 }));
+  const sp = await req(owner, 'POST', `/jobs/${sid}/voice`, { body: form({ voice: 'none', line1: 'Here is the yard before we started.', line2: 'And here it is, swept clean.', line3: 'EKP11. Skip the skip.' }) });
+  ok('No voice makes a video without spending a voice generation', sp.status === 303 && (await wait(sid)).state === 'ready');
+  const g0 = (await usage()).voice_generations;
+  const sf = await fetchVideo(sid), sdur = dur(sf, 'v');
+  ok('silent video: audio length equals video length', Math.abs(dur(sf, 'a') - sdur) <= 0.0401, `${dur(sf, 'a')} ${sdur}`);
+  // voiced video
+  const vid = await J('Commercial yard');
+  await upload(owner, vid, 'before', 0, real('before.jpg') || await jpeg(1200, 1600)); await upload(owner, vid, 'during', 0, real('work.jpg') || await jpeg(1200, 1600, { shade: 20 })); await upload(owner, vid, 'after', 0, real('after.jpg') || await jpeg(1200, 1600, { shade: 50 }));
+  const lines5 = { voice: 'IosqM5LMIzqPfT0efhhy', line1: 'Here is the yard before we started.', line2: 'And here it is, swept clean.', line3: 'EKP11. Skip the skip.' };
+  await req(owner, 'POST', `/jobs/${vid}/voice`, { body: form(lines5) });
+  const st = await wait(vid);
+  ok('a voiced video finishes', st.state === 'ready', JSON.stringify(st));
+  if (st.state === 'ready') {
+    const f = await fetchVideo(vid), vd = dur(f, 'v'), ad = dur(f, 'a');
+    ok('voiced video: audio and video lengths equal within one frame', Math.abs(vd - ad) <= 0.0401, `${ad} ${vd}`);
+    ok('voiced video is longer than the silent one and has speech at about -16 LUFS', vd > 6 && (() => { const l = lufs(f); console.log('   loudness', l); return l !== null && l > -19 && l < -13; })());
+    const g1 = (await usage()).voice_generations;
+    ok('one voice generation for the whole video', g1 === g0 + 1, `${g0} -> ${g1}`);
+    await req(owner, 'POST', `/jobs/${vid}/voice`, { body: form(lines5) });
+    const st2 = await wait(vid);
+    ok('Redo with the same lines and voice does not spend a second generation', st2.state === 'ready' && (await usage()).voice_generations === g1, JSON.stringify(await usage()));
+    await req(owner, 'POST', `/jobs/${vid}/voice`, { body: form({ ...lines5, line2: 'And here it is, all clear.' }) });
+    ok('changing a line makes a new recording', (await wait(vid)).state === 'ready' && (await usage()).voice_generations === g1 + 1);
+    const nv = await J('Garden'); const vs2 = (await req(owner, 'GET', `/jobs/${nv}/voice`)).text;
+    ok('the voice choice is remembered for the next job', /value="IosqM5LMIzqPfT0efhhy" checked/.test(vs2));
+  }
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -281,6 +343,7 @@ async function phase4() {
     if (['phase2', 'all'].includes(which)) ctx = await phase2();
     if (['phase3', 'all'].includes(which)) await phase3(ctx);
     if (['phase4', 'all'].includes(which)) await phase4();
+    if (['phase5', 'all'].includes(which)) await phase5();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
   console.log(`\n${pass} passed, ${fail} failed`);

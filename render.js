@@ -5,7 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { sameOrigin } = require('./lib/util');
 
-module.exports = function render({ app, pool, SKIN, acct, jobsMod, events }) {
+module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVoice }) {
   const { needUser } = acct;
   const queue = []; let busy = false;
   const ENGINE = path.join(__dirname, 'video', 'engine.py');
@@ -24,9 +24,8 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events }) {
       photos: ph.slice(0, 5).map(p => ({ kind: p.kind, src: path.join(dir, `${p.kind}${p.seq}.jpg`) })),
       voice: null, lines: []
     };
-    // phase 5 writes voice.mp3 + lines.json next to the photos when a voice is chosen
-    const vf = path.join(dir, 'voice.mp3'), lf = path.join(dir, 'lines.json');
-    if (j.voice_id && fs.existsSync(vf) && fs.existsSync(lf)) { cfg.voice = vf; cfg.lines = JSON.parse(fs.readFileSync(lf, 'utf8')); }
+    const v = await getVoice().ensure(j, dir);          // null = silent video; otherwise the saved or freshly made recording
+    if (v) { cfg.voice = v.voice; cfg.lines = v.lines; }
     return cfg;
   }
 
@@ -101,5 +100,5 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events }) {
     const r = (await pool.query("SELECT id FROM jobs WHERE state='rendering' ORDER BY id")).rows;
     r.forEach(x => queue.push(x.id)); if (r.length) { console.log('Re-queued renders:', r.map(x => x.id).join(',')); pump(); }
   }
-  return { init, enqueue };
+  return { init, enqueue, start };
 };
