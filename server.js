@@ -62,7 +62,9 @@ app.get('/manifest.json', (req, res) => res.set('Cache-Control', 'public, max-ag
   background_color: '#FFFFFF', theme_color: SKIN.accent,
   icons: [{ src: '/assets/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: '/assets/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }, { src: '/assets/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }]
 })));
-app.get('/sw.js', (req, res) => res.type('application/javascript').set('Cache-Control', 'no-cache').send('self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));'));
+// Service worker: lets Chrome treat the site as an installable app. It never caches pages or photos (signed-in data must stay fresh).
+app.get('/sw.js', (req, res) => res.type('application/javascript').set({ 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' }).send(
+  'self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",e=>{e.respondWith(fetch(e.request));});'));
 app.get('/robots.txt', (req, res) => res.type('text/plain').send('User-agent: *\nDisallow: /\n'));
 
 // ---------- modules ----------
