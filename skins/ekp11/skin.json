@@ -22,6 +22,7 @@
   ],
   "job_types": ["House clearance", "Garden", "Garage", "Builders' waste", "Cardboard and packaging", "Commercial yard", "Other"],
   "max_during": 3,
+  "crew_enabled": false,
   "crew_can_capture": false,
   "orientation": "auto",
   "spoken_name": "E K P eleven",

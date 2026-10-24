@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const BASE = (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const ADMIN = process.env.ADMIN_USER || 'admin', ADMIN_PW = process.env.ADMIN_PASSWORD || '';
 const which = process.argv[2] || 'all';
-let CREW_CAP = true;
+let CREW_CAP = true, CREW_ON = true;
 const TEST = '@snaplite-test.invalid', RUN = Date.now().toString(36);
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { cond ? pass++ : fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
@@ -92,19 +92,31 @@ async function phase2() {
   const home = await req(owner, 'GET', '/');
   ok('owner sees the jobs screen', home.status === 200 && /New job/.test(home.text));
   // crew
+  let crew = { cookie: '' }, pw = 'x';
+  if (CREW_ON) {
   const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: crewEmail }) });
-  const pw = (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1];
+  pw = (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1];
   ok('owner creates a crew login with a temporary password', inv.status === 303 && !!pw, inv.loc);
-  const { p: crew, r: lc } = await login(crewEmail, pw || 'x');
+  const lg = await login(crewEmail, pw || 'x'); crew = lg.p; const lc = lg.r;
   ok('crew signs in with the temporary password', lc.status === 303 && !!crew.cookie);
   const cs = await req(crew, 'GET', '/settings');
   ok('crew settings show no crew management', cs.status === 200 && !/Create crew login/.test(cs.text));
   ok('owner settings show crew management', /Create crew login/.test((await req(owner, 'GET', '/settings')).text));
+  } else {
+    const inv0 = await req(owner, 'POST', '/settings/invite', { body: form({ email: crewEmail }) });
+    ok('crew logins are switched off: creating one is refused', inv0.status === 403, String(inv0.status));
+    ok('crew removal is refused too', (await req(owner, 'POST', '/settings/crew/1/remove')).status === 403);
+    const st = (await req(owner, 'GET', '/settings')).text;
+    ok('settings show no crew section or invite form', st.length > 500 && !/Create crew login/.test(st) && !/<h2>Crew<\/h2>/.test(st) && !/settings\/invite/.test(st));
+  }
   // jobs for role tests
-  const cjr = await req(crew, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } });
+  const cjr = !CREW_ON ? null : await req(crew, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } });
   const oj = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garage' }, headers: { accept: 'application/json' } })).json().id;
   let cj;
-  if (CREW_CAP) { cj = cjr.json().id; ok('crew and owner can each start a job', !!cj && !!oj, `${cj} ${oj}`); }
+  if (!CREW_ON) {
+    cj = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } })).json().id;
+    ok('owner can start jobs', !!oj && !!cj);
+  } else if (CREW_CAP) { cj = cjr.json().id; ok('crew and owner can each start a job', !!cj && !!oj, `${cj} ${oj}`); }
   else {
     cj = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } })).json().id;
     ok('on this account only the owner can start jobs (crew get 403)', cjr.status === 403 && !!oj);
@@ -114,13 +126,14 @@ async function phase2() {
   }
   // crew cannot reach owner-only routes, even by calling them directly
   const denied = [['POST', `/api/jobs/${cj}/approve`], ['POST', `/api/jobs/${cj}/shared`], ['DELETE', `/api/jobs/${cj}`], ['POST', `/api/jobs/${cj}/delete`], ['POST', `/jobs/${cj}/delete`], ['POST', `/jobs/${cj}/approve`], ['POST', '/settings/invite'], ['POST', `/settings/crew/1/remove`]];
-  for (const [m, p] of denied) { const r = await req(crew, m, p, p === '/settings/invite' ? { body: form({ email: `x${RUN}${TEST}` }) } : {}); ok(`crew blocked: ${m} ${p}`, r.status === 403, String(r.status)); }
+  if (CREW_ON) for (const [m, p] of denied) { const r = await req(crew, m, p, p === '/settings/invite' ? { body: form({ email: `x${RUN}${TEST}` }) } : {}); ok(`crew blocked: ${m} ${p}`, r.status === 403, String(r.status)); }
   const still = await req(crew, 'GET', `/api/jobs/${cj}/status`);
   if (CREW_CAP) ok('the crew job survived those attempts', still.status === 200);
   const ap = await req(owner, 'POST', `/api/jobs/${cj}/approve`);
   ok('owner passes the role check (a draft cannot be approved yet)', ap.status === 409, String(ap.status));
   const sh = await req(owner, 'POST', `/api/jobs/${cj}/shared`);
   ok('owner share needs an approved job', sh.status === 409, String(sh.status));
+  if (CREW_ON) {
   // visibility
   ok('crew cannot open the owner\'s job', (await req(crew, 'GET', `/api/jobs/${oj}/status`)).status === 404);
   const list = (await req(crew, 'GET', '/api/jobs')).json();
@@ -142,6 +155,7 @@ async function phase2() {
   const page = (await req(owner, 'GET', '/settings')).text, id2 = (page.match(/\/settings\/crew\/(\d+)\/remove/) || [])[1];
   const rm = await req(owner, 'POST', `/settings/crew/${id2}/remove`);
   ok('owner removes a crew member and their session stops working', rm.status === 303 && (await req({ cookie: crew2.cookie }, 'GET', '/api/jobs')).status === 401);
+  }
   const pc = await req(owner, 'POST', '/settings/password', { body: form({ current: ownerPw, next: ownerPw + 'x' }) });
   ok('owner changes password', /m=pw/.test(pc.loc) && (await login(ownerEmail, ownerPw + 'x')).r.status === 303);
   return { owner, ownerPw: ownerPw + 'x', ownerEmail };
@@ -236,8 +250,9 @@ async function phase4() {
   const e = `owner4-${RUN}${TEST}`, pw = 'Owner-pass-' + RUN;
   await req(admin(), 'POST', '/admin/owner', { body: form({ email: e, password: pw, name: 'T' }) });
   const owner = (await login(e, pw)).p;
-  const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew4-${RUN}${TEST}` }) });
-  const crew = (await login(`crew4-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p;
+  let crew = { cookie: '' };
+  if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew4-${RUN}${TEST}` }) });
+    crew = (await login(`crew4-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
   const J = async (who, type) => (await req(who, 'POST', '/api/jobs', { json: { job_type: type }, headers: { accept: 'application/json' } })).json().id;
   const dir = process.env.PHOTO_DIR, real = n => dir && fs.existsSync(path.join(dir, n)) ? fs.readFileSync(path.join(dir, n)) : null;
   const wait = async (who, id, secs = 240) => { for (let i = 0; i < secs; i += 3) { const s = (await req(who, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') return s; await new Promise(r => setTimeout(r, 3000)); } return { state: 'timeout' }; };
@@ -274,8 +289,8 @@ async function phase4() {
   ok('the review screen shows the video and an Approve button', /<video/.test(rv) && /Approve/.test(rv));
   // crew rules
   const cid = CREW_CAP ? await J(crew, 'Garden') : null;
-  ok('crew cannot see or fetch the owner video', (await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: crew.cookie } })).status === 404);
-  ok('crew cannot start a render on a job that is not theirs', (await req(crew, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 404);
+  if (CREW_ON) ok('crew cannot see or fetch the owner video', (await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: crew.cookie } })).status === 404);
+  if (CREW_ON) ok('crew cannot start a render on a job that is not theirs', (await req(crew, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 404);
   if (CREW_CAP) {
     await upload(crew, cid, 'before', 0, await jpeg(1200, 1600)); await upload(crew, cid, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
     ok('crew can make a video of their own job', (await req(crew, 'POST', `/api/jobs/${cid}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 200);
@@ -378,8 +393,9 @@ async function phase6() {
   const e = `owner6-${RUN}${TEST}`, pw = 'Owner-pass-' + RUN;
   await req(admin(), 'POST', '/admin/owner', { body: form({ email: e, password: pw, name: 'T' }) });
   const owner = (await login(e, pw)).p;
-  const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew6-${RUN}${TEST}` }) });
-  const crew = (await login(`crew6-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p;
+  let crew = { cookie: '' };
+  if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew6-${RUN}${TEST}` }) });
+    crew = (await login(`crew6-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
   const A = { headers: { accept: 'application/json' } };
   const mk = async (who) => { const id = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id; await upload(who, id, 'before', 0, await jpeg(1200, 1600)); await upload(who, id, 'after', 0, await jpeg(1200, 1600, { shade: 50 }));
     await req(who, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'EKP11. Skip the skip.' }) });
@@ -410,16 +426,16 @@ async function phase6() {
   ok('an expired link is not found', (await fetch(BASE + U.pathname + `?e=1000&s=${U.searchParams.get('s')}`)).status === 404);
   ok('a signature does not work on another job slug', (await fetch(BASE + '/job/aaaaaaaaaaaa?' + U.search.slice(1))).status === 404);
   ok('the signed video url without a signature is not found', (await fetch(BASE + U.pathname + '/video')).status === 404);
-  ok('crew cannot make links', (await req(crew, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A })).status === 403);
+  if (CREW_ON) ok('crew cannot make links', (await req(crew, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A })).status === 403);
   const sh = await req(owner, 'POST', `/api/jobs/${id}/shared`, { json: {}, ...A });
   ok('sharing marks the job Shared', sh.status === 200 && sh.json().state === 'shared');
   await req(owner, 'POST', `/api/jobs/${id}/shared`, { json: {}, ...A });
   const pg2 = (await req(owner, 'GET', `/jobs/${id}`)).text;
   ok('the screen shows how many times it was shared', /Shared 2 times/.test(pg2));
-  const ct = (await req(crew, 'GET', `/jobs/${id}`)).text;
-  ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/id="b-share"/.test(ct) && !/Copy link/.test(ct));
+  const ct = CREW_ON ? (await req(crew, 'GET', `/jobs/${id}`)).text : '';
+  if (CREW_ON) ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/id="b-share"/.test(ct) && !/Copy link/.test(ct));
   const cid = CREW_CAP ? await mk(crew) : await mk(owner);
-  ok('crew cannot approve or share a job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
+  if (CREW_ON) ok('crew cannot approve or share a job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
   await req(owner, 'DELETE', `/api/jobs/${id}`);
   ok('deleting the job kills its link', (await fetch(BASE + path_)).status === 404);
 }
@@ -436,7 +452,9 @@ async function engine() {
   try {
     let ctx;
     try { CREW_CAP = (await (await fetch(BASE + '/health')).json()).crew_can_capture !== false; } catch (e) {}
-    console.log('Crew can take photos on this account:', CREW_CAP);
+    try { CREW_ON = (await (await fetch(BASE + '/health')).json()).crew_enabled !== false; } catch (e) {}
+    if (!CREW_ON) CREW_CAP = false;
+    console.log('Crew logins on this account:', CREW_ON, '| crew can take photos:', CREW_CAP);
     if (['phase1', 'all'].includes(which)) { await phase1(); await phaseQr(); }
     if (['phase2', 'all'].includes(which)) ctx = await phase2();
     if (['phase3', 'all'].includes(which)) await phase3(ctx);

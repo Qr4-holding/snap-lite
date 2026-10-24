@@ -30,6 +30,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events }) {
     const r = (await pool.query(`SELECT u.id, u.biz_id, u.email, u.role, u.name, b.name AS biz_name, b.slug AS biz_slug
       FROM biz_sessions s JOIN users u ON u.id=s.user_id JOIN businesses b ON b.id=u.biz_id
       WHERE s.token=$1 AND s.expires > now() AND u.deleted_at IS NULL AND b.status='active'`, [t])).rows[0];
+    if (r && r.role === 'crew' && !SKIN.crew_enabled) return null;
     return r || null;
   }
   async function signIn(req, res, user) {
@@ -103,7 +104,7 @@ ${msg(m, true)}
     const b = req.body || {}, email = clean(b.email, 120).toLowerCase();
     if (limited('login:' + req.ip, 20)) return res.status(429).send(signInPage('Too many tries. Please wait an hour.', email));
     const u = (await pool.query(`SELECT u.*, bz.status AS bstatus FROM users u JOIN businesses bz ON bz.id=u.biz_id WHERE u.email=$1 AND u.deleted_at IS NULL`, [email])).rows[0];
-    if (!u || u.bstatus !== 'active' || !checkPw(String(b.password || ''), u.password_hash)) return res.status(401).send(signInPage('Wrong email or password.', email));
+    if (!u || u.bstatus !== 'active' || (u.role === 'crew' && !SKIN.crew_enabled) || !checkPw(String(b.password || ''), u.password_hash)) return res.status(401).send(signInPage('Wrong email or password.', email));
     await signIn(req, res, u);
     events('sign_in', u.id);
     res.redirect(303, '/');
@@ -120,7 +121,7 @@ ${msg(m, true)}
     res.set('Cache-Control', 'no-store').send(page('Settings', `
 <h1>Settings</h1>${msg(flash, /^(bad|dup|badpw)$/.test(q.m || ''))}${invited}
 <p>Signed in as <b>${esc(u.email)}</b> (${u.role}).</p>
-${u.role === 'owner' ? `<h2>Crew</h2>
+${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
 <form class="card" method="post" action="/settings/invite"><label class="f">Crew email<input name="email" type="email" required inputmode="email"></label><button type="submit">Create crew login</button><span class="small">Crew can take photos and make videos. Only you can approve and share.</span></form>` : ''}
 <h2>Change password</h2>
@@ -132,6 +133,7 @@ ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c
   } catch (e) { next(e); } });
 
   app.post('/settings/invite', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
+    if (!SKIN.crew_enabled) return res.status(403).send('Crew logins are not used on this app.');
     const pw = tempPassword();
     try { await createUser({ email: req.body.email, password: pw, name: '', role: 'crew' }); }
     catch (e) { return res.redirect(303, '/settings?m=' + (/already/.test(e.message) ? 'dup' : 'bad')); }
@@ -140,6 +142,7 @@ ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c
   } catch (e) { next(e); } });
 
   app.post('/settings/crew/:id/remove', sameOrigin, needUser(), needOwner, async (req, res, next) => { try {
+    if (!SKIN.crew_enabled) return res.status(403).send('Crew logins are not used on this app.');
     const id = parseInt(req.params.id, 10) || 0;
     const c = (await pool.query(`SELECT id FROM users WHERE id=$1 AND biz_id=$2 AND role='crew' AND deleted_at IS NULL`, [id, req.user.biz_id])).rows[0];
     if (c) await softDelete(c.id);
