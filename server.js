@@ -78,7 +78,7 @@ app.get('/get', (req, res) => {
   const have = fs.existsSync(APK), mb = have ? (fs.statSync(APK).size / 1048576).toFixed(1) : '';
   res.set('Cache-Control', 'no-cache').send(ui.page('Install the app', `
 <h1>Install ${SKIN.app_name || SKIN.name}</h1>
-${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${process.env.APP_VERSION || ''}.</p>
+${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${(fs.existsSync(path.join(__dirname, 'apk', 'version.txt')) ? fs.readFileSync(path.join(__dirname, 'apk', 'version.txt'), 'utf8').trim() : process.env.APP_VERSION) || ''}.</p>
 <h2>Then, on your phone</h2>
 <ol style="padding-left:22px;display:grid;gap:10px">
 <li><b>Tap the download.</b> If Chrome says the file may be harmful, tap <b>Download anyway</b>. It is our own app.</li>

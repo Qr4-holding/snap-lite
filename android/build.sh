@@ -28,7 +28,7 @@ keyPassword=$KS_PASS
 EOP
 (cd $P && gradle --no-daemon -q assembleRelease)
 APK=$(find $P -name "*-release.apk" | head -1)
-cp "$APK" ../apk/$SKIN-snap.apk
+cp "$APK" ../apk/$SKIN-snap.apk; echo "$VNAME" > ../apk/version.txt
 FP=$(keytool -list -v -keystore "$KEYSTORE" -storepass "$KS_PASS" -alias release 2>/dev/null | grep "SHA256:" | sed 's/.*SHA256: //')
 cat > ../apk/assetlinks.json <<EOP
 [{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"$APP_ID","sha256_cert_fingerprints":["$FP"]}}]
