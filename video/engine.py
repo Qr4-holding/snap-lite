@@ -151,7 +151,8 @@ def caption_cues(lines, offset):
             else:
                 span = ln['end'] - ln['start']; a = ln['start'] + span * k / nw; b = ln['start'] + span * (k + n) / nw
             cues.append((a + offset - 0.05, b + offset, part)); k += n
-    return cues
+    cues.sort(key=lambda c: c[0])
+    return [(a, min(b, cues[i + 1][0] - 0.02) if i + 1 < len(cues) else b, t) for i, (a, b, t) in enumerate(cues)]   # never two captions at once
 
 
 # ---------------------------------------------------------------- main
