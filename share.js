@@ -65,11 +65,11 @@ ${SKIN.web ? `<a class="btn sec" href="https://${esc(SKIN.web)}">${esc(SKIN.web)
   function panel(j, owner) {
     const id = j.id, text = `${SKIN.name}: before and after.${SKIN.phone ? ' ' + SKIN.phone : ''}`;
     const html = `<div class="card" id="share" style="margin-top:10px;gap:8px">
-${owner ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button type="button" id="b-wa" style="background:#1a9c4a">WhatsApp</button><button type="button" id="b-fb" style="background:#1877f2">Facebook</button></div>
-<button type="button" id="b-share">More…</button>` : ''}
+${owner ? `<button type="button" id="b-share">Share video</button>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button type="button" id="b-wa" class="small" style="background:#1a9c4a;width:100%;font-size:15px">Send link on WhatsApp</button><button type="button" id="b-fb" class="small" style="background:#1877f2;width:100%;font-size:15px">Send link on Facebook</button></div>` : ''}
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><a class="btn sec" id="b-save" href="/api/jobs/${id}/video?dl=1" download="${esc(SKIN.id)}-${id}.mp4">Save to phone</a>
 ${owner ? `<button type="button" class="sec" id="b-copy">Copy link</button>` : ''}</div>
-<p class="small" id="share-note" style="margin:0">${j.state === 'shared' ? `Shared ${j.share_count} time${j.share_count === 1 ? '' : 's'}${j.shared_at ? ', last on ' + new Date(j.shared_at).toLocaleDateString('en-GB') : ''}. ` : ''}${owner ? 'WhatsApp and Facebook send a link that plays the video. “More…” opens the share menu on your phone and sends the video file itself.' : ''}</p></div>`;
+<p class="small" id="share-note" style="margin:0">${j.state === 'shared' ? `Shared ${j.share_count} time${j.share_count === 1 ? '' : 's'}${j.shared_at ? ', last on ' + new Date(j.shared_at).toLocaleDateString('en-GB') : ''}. ` : ''}${owner ? '“Share video” sends the video file itself. The WhatsApp and Facebook buttons send only a link that plays it.' : ''}</p></div>`;
     const script = `
 var ID=${id},TEXT=${JSON.stringify(text)},note=document.getElementById('share-note');
 function say(t){note.textContent=t;}
