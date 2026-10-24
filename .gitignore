@@ -6,3 +6,4 @@ work
 out
 *.apk
 .env
+__pycache__/
