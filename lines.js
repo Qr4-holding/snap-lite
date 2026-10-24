@@ -3,7 +3,7 @@
 // no places, nothing claimed that the skin has not listed in facts_allowed.
 const BANNED = ['best', 'cheapest', 'cheap', 'guaranteed', 'guarantee', 'vetted', 'certified', 'number one', 'award', 'awards', 'award-winning', 'finest', 'top rated', 'no 1', 'unbeatable', 'perfect', 'amazing'];
 const CLAIMS = ['licensed', 'licenced', 'insured', 'registered', 'accredited', 'family-run', 'family run', 'same day', 'same-day', 'free quote', 'free quotes', 'fully', 'years', 'recycled', 'recycle', 'eco-friendly', 'affordable', 'fast', 'fastest', 'cheaper', 'lowest', 'discount', 'offer', 'trusted', 'reliable', 'professional', 'experienced', 'local', 'nationwide', 'rated'];
-const PLACE_SUFFIX = /\b(street|road|lane|avenue|close|drive|crescent|court|terrace|gardens|way|park|estate)\b/i;
+const PLACE_SUFFIX = /\b(street|road|lane|avenue|crescent|terrace)\b/i;
 const MAX_WORDS = 11;
 
 module.exports = function lines(SKIN, secrets) {
