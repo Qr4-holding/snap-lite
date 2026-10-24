@@ -21,6 +21,12 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 6 },
     fileFilter: (req, file, cb) => cb(null, file.fieldname === 'file' && /^image\//.test(file.mimetype)) });
 
+  // some clients (EKP11) want only the owner to take photos: skin flag crew_can_capture=false
+  const capOk = (req, res, next) => {
+    if (SKIN.crew_can_capture || (req.user && req.user.role === 'owner')) return next();
+    return req.path.startsWith('/api/') ? res.status(403).json({ error: 'Only the owner can take photos on this account.' }) : res.redirect(303, '/');
+  };
+
   async function init() {
     await pool.query(`CREATE TABLE IF NOT EXISTS jobs (
       id SERIAL PRIMARY KEY, slug TEXT UNIQUE NOT NULL, biz_id INT NOT NULL, user_id INT, title TEXT NOT NULL DEFAULT '',
@@ -49,7 +55,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
   const newSlug = () => crypto.randomBytes(6).toString('hex');
 
   // ---------- create a job ----------
-  app.post('/api/jobs', sameOrigin, needUser({ json: true }), express.json({ limit: '5kb' }), form, async (req, res, next) => { try {
+  app.post('/api/jobs', sameOrigin, needUser({ json: true }), capOk, express.json({ limit: '5kb' }), form, async (req, res, next) => { try {
     const b = req.body || {}, type = clean(b.job_type, 60);
     const job_type = SKIN.job_types.includes(type) ? type : (SKIN.job_types[0] || '');
     const j = (await pool.query('INSERT INTO jobs (slug,biz_id,user_id,job_type) VALUES ($1,$2,$3,$4) RETURNING id', [newSlug(), req.user.biz_id, req.user.id, job_type])).rows[0];
@@ -60,7 +66,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
 
   // ---------- one photo at a time ----------
   const uploadSafe = (req, res, next) => upload.single('file')(req, res, e => e ? res.status(e.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'That photo is too large (25 MB max).' : 'Could not read that upload.' }) : next());
-  app.post('/api/jobs/:id/photos', sameOrigin, needUser({ json: true }), uploadSafe, async (req, res, next) => { try {
+  app.post('/api/jobs/:id/photos', sameOrigin, needUser({ json: true }), capOk, uploadSafe, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: 'Job not found.' });
     if (!canEdit(req.user, j)) return res.status(409).json({ error: 'This job can no longer be changed.' });
@@ -92,7 +98,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
   } catch (e) { next(e); } });
 
   // remove one photo from a draft (the capture screen's Remove button)
-  app.delete('/api/jobs/:id/photos/:kind/:seq', sameOrigin, needUser({ json: true }), async (req, res, next) => { try {
+  app.delete('/api/jobs/:id/photos/:kind/:seq', sameOrigin, needUser({ json: true }), capOk, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j || !canEdit(req.user, j)) return res.status(404).json({ error: 'Job not found.' });
     const { kind, seq } = req.params;
@@ -173,17 +179,17 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
     const group = (title, states) => { const list = rows.filter(r => states.includes(r.state)); return list.length ? `<h2>${title} <span class="small">(${list.length})</span></h2><div class="jobs">${list.map(r => jobCard(r, r.user_id === u.id)).join('')}</div>` : ''; };
     const flash = { deleted: 'Job deleted.' }[req.query.m] || '';
     res.set('Cache-Control', 'no-store').send(page('Jobs', `
-${msg(flash)}<a class="btn" href="/new" style="min-height:72px;font-size:22px">＋ New job</a>
+${msg(flash)}${u.role === 'owner' || SKIN.crew_can_capture ? '<a class="btn" href="/new" style="min-height:72px;font-size:22px">＋ New job</a>' : ''}
 ${u.role === 'owner' ? group('Needs approval', ['ready']) : ''}${group('Ready to share', ['approved'])}${group('Shared', ['shared'])}${group('Drafts', ['draft', 'rendering'])}${group('Failed', ['failed'])}
-${rows.length ? '' : `<p class="small" style="margin-top:18px">No jobs yet. Tap New job and take a before photo.</p>`}`, { user: u }));
+${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'owner' || SKIN.crew_can_capture ? 'No jobs yet. Tap New job and take a before photo.' : 'Nothing shared yet. Videos the owner shares appear here.'}</p>`}`, { user: u }));
   } catch (e) { next(e); } });
 
-  app.get('/new', needUser(), (req, res) => res.set('Cache-Control', 'no-store').send(page('New job', `
+  app.get('/new', needUser(), capOk, (req, res) => res.set('Cache-Control', 'no-store').send(page('New job', `
 <h1>New job</h1>
 <form class="card" method="post" action="/api/jobs"><label class="f">What was the job?<select name="job_type">${SKIN.job_types.map(t => `<option>${esc(t)}</option>`).join('')}</select></label>
 <button type="submit">Start: take the before photo</button></form>`, { user: req.user })));
 
-  app.get('/jobs/:id/capture', needUser(), async (req, res, next) => { try {
+  app.get('/jobs/:id/capture', needUser(), capOk, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.redirect(303, '/');
     if (!canEdit(req.user, j)) return res.redirect(303, `/jobs/${j.id}`);

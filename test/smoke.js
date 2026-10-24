@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const BASE = (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const ADMIN = process.env.ADMIN_USER || 'admin', ADMIN_PW = process.env.ADMIN_PASSWORD || '';
 const which = process.argv[2] || 'all';
+let CREW_CAP = true;
 const TEST = '@snaplite-test.invalid', RUN = Date.now().toString(36);
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { cond ? pass++ : fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
@@ -100,14 +101,22 @@ async function phase2() {
   ok('crew settings show no crew management', cs.status === 200 && !/Create crew login/.test(cs.text));
   ok('owner settings show crew management', /Create crew login/.test((await req(owner, 'GET', '/settings')).text));
   // jobs for role tests
-  const cj = (await req(crew, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } })).json().id;
+  const cjr = await req(crew, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } });
   const oj = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garage' }, headers: { accept: 'application/json' } })).json().id;
-  ok('crew and owner can each start a job', !!cj && !!oj, `${cj} ${oj}`);
+  let cj;
+  if (CREW_CAP) { cj = cjr.json().id; ok('crew and owner can each start a job', !!cj && !!oj, `${cj} ${oj}`); }
+  else {
+    cj = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } })).json().id;
+    ok('on this account only the owner can start jobs (crew get 403)', cjr.status === 403 && !!oj);
+    ok('crew cannot open the capture or new-job screens', (await req(crew, 'GET', '/new')).status === 303 && (await req(crew, 'GET', `/jobs/${oj}/capture`)).status === 303);
+    ok('crew cannot upload photos to an owner job', (await upload(crew, oj, 'before', 0, await jpeg(1200, 1600))).status === 403);
+    ok('crew home shows no New job button or tab', !/href="\/new"/.test((await req(crew, 'GET', '/')).text));
+  }
   // crew cannot reach owner-only routes, even by calling them directly
   const denied = [['POST', `/api/jobs/${cj}/approve`], ['POST', `/api/jobs/${cj}/shared`], ['DELETE', `/api/jobs/${cj}`], ['POST', `/api/jobs/${cj}/delete`], ['POST', `/jobs/${cj}/delete`], ['POST', `/jobs/${cj}/approve`], ['POST', '/settings/invite'], ['POST', `/settings/crew/1/remove`]];
   for (const [m, p] of denied) { const r = await req(crew, m, p, p === '/settings/invite' ? { body: form({ email: `x${RUN}${TEST}` }) } : {}); ok(`crew blocked: ${m} ${p}`, r.status === 403, String(r.status)); }
   const still = await req(crew, 'GET', `/api/jobs/${cj}/status`);
-  ok('the crew job survived those attempts', still.status === 200);
+  if (CREW_CAP) ok('the crew job survived those attempts', still.status === 200);
   const ap = await req(owner, 'POST', `/api/jobs/${cj}/approve`);
   ok('owner passes the role check (a draft cannot be approved yet)', ap.status === 409, String(ap.status));
   const sh = await req(owner, 'POST', `/api/jobs/${cj}/shared`);
@@ -115,7 +124,7 @@ async function phase2() {
   // visibility
   ok('crew cannot open the owner\'s job', (await req(crew, 'GET', `/api/jobs/${oj}/status`)).status === 404);
   const list = (await req(crew, 'GET', '/api/jobs')).json();
-  ok('crew list holds only their own jobs', Array.isArray(list) && list.every(j => j.mine || j.state === 'shared') && list.some(j => j.id === cj) && !list.some(j => j.id === oj));
+  ok('crew list holds only their own jobs', Array.isArray(list) && list.every(j => j.mine || j.state === 'shared') && (!CREW_CAP || list.some(j => j.id === cj)) && !list.some(j => j.id === oj));
   ok('owner sees both jobs', ((await req(owner, 'GET', '/api/jobs')).json() || []).filter(j => [cj, oj].includes(j.id)).length === 2);
   // account deletion keeps jobs
   const wd = await req(crew, 'POST', '/settings/delete-account', { body: form({ password: 'wrong-wrong' }) });
@@ -264,11 +273,13 @@ async function phase4() {
   const rv = (await req(owner, 'GET', `/jobs/${id}`)).text;
   ok('the review screen shows the video and an Approve button', /<video/.test(rv) && /Approve/.test(rv));
   // crew rules
-  const cid = await J(crew, 'Garden');
+  const cid = CREW_CAP ? await J(crew, 'Garden') : null;
   ok('crew cannot see or fetch the owner video', (await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: crew.cookie } })).status === 404);
   ok('crew cannot start a render on a job that is not theirs', (await req(crew, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 404);
-  await upload(crew, cid, 'before', 0, await jpeg(1200, 1600)); await upload(crew, cid, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
-  ok('crew can make a video of their own job', (await req(crew, 'POST', `/api/jobs/${cid}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 200);
+  if (CREW_CAP) {
+    await upload(crew, cid, 'before', 0, await jpeg(1200, 1600)); await upload(crew, cid, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
+    ok('crew can make a video of their own job', (await req(crew, 'POST', `/api/jobs/${cid}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 200);
+  }
   // landscape and mixed, queued behind it
   const lid = await J(owner, 'Garage');
   await upload(owner, lid, 'before', 0, await jpeg(1600, 1200)); await upload(owner, lid, 'after', 0, await jpeg(1600, 1200, { shade: 40 }));
@@ -276,7 +287,7 @@ async function phase4() {
   const mid = await J(owner, 'Garden');
   await upload(owner, mid, 'before', 0, await jpeg(1200, 1600)); await upload(owner, mid, 'during', 0, await jpeg(1600, 1200, { shade: 20 })); await upload(owner, mid, 'after', 0, await jpeg(1600, 1200, { shade: 40 }));
   await req(owner, 'POST', `/api/jobs/${mid}/render`, { json: {}, headers: { accept: 'application/json' } });
-  ok('crew video finishes', (await wait(crew, cid)).state === 'ready');
+  if (CREW_CAP) ok('crew video finishes', (await wait(crew, cid)).state === 'ready');
   ok('landscape job finishes', (await wait(owner, lid)).state === 'ready');
   const pl = await probe(owner, lid);
   ok('landscape photos give a 1920x1080 video, audio matching', pl.size === '1920,1080' && Math.abs(pl.a - pl.v) <= 0.0401, JSON.stringify(pl));
@@ -407,8 +418,8 @@ async function phase6() {
   ok('the screen shows how many times it was shared', /Shared 2 times/.test(pg2));
   const ct = (await req(crew, 'GET', `/jobs/${id}`)).text;
   ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/id="b-share"/.test(ct) && !/Copy link/.test(ct));
-  const cid = await mk(crew);
-  ok('crew cannot approve or share their own job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
+  const cid = CREW_CAP ? await mk(crew) : await mk(owner);
+  ok('crew cannot approve or share a job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
   await req(owner, 'DELETE', `/api/jobs/${id}`);
   ok('deleting the job kills its link', (await fetch(BASE + path_)).status === 404);
 }
@@ -424,6 +435,8 @@ async function engine() {
   console.log('Testing ' + BASE);
   try {
     let ctx;
+    try { CREW_CAP = (await (await fetch(BASE + '/health')).json()).crew_can_capture !== false; } catch (e) {}
+    console.log('Crew can take photos on this account:', CREW_CAP);
     if (['phase1', 'all'].includes(which)) { await phase1(); await phaseQr(); }
     if (['phase2', 'all'].includes(which)) ctx = await phase2();
     if (['phase3', 'all'].includes(which)) await phase3(ctx);

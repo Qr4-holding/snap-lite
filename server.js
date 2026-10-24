@@ -36,7 +36,7 @@ async function initDb(tries = 30) {
 }
 const events = (type, userId = null, jobId = null, detail = '') => pool.query('INSERT INTO events (type,user_id,job_id,detail) VALUES ($1,$2,$3,$4)', [type, userId, jobId, String(detail).slice(0, 80)]).catch(() => {});
 
-app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id }));
+app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id, crew_can_capture: SKIN.crew_can_capture }));
 
 // ---------- the client's brand: logo, icons, manifest ----------
 app.get('/assets/logo.png', (req, res) => res.set('Cache-Control', 'public, max-age=3600').type('png').sendFile(SKIN.logoFile));
