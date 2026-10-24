@@ -94,7 +94,7 @@ if(bc)bc.addEventListener('click',async function(){
     catch(e){window.prompt('Copy this link',u);}
     await mark();
   }catch(e){say('Could not make the link. Try again.');}});`;
-    return { html, script };
+    return { html, script: owner ? script : "" };
   }
   return { init, panel };
 };
