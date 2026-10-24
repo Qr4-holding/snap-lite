@@ -70,6 +70,7 @@ app.get('/robots.txt', (req, res) => res.type('text/plain').send('User-agent: *\
 // ---------- modules ----------
 const acct = require('./accounts')({ app, pool, SKIN, ui, events });
 const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events });
+const renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events });
 const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod });
 
 app.use((req, res) => res.status(404).type('text/plain').send('Not found'));
@@ -80,5 +81,6 @@ initDb()
   .then(() => adminMod.init())
   .then(() => acct.init())
   .then(() => jobsMod.init())
+  .then(() => renderMod.init())
   .then(() => app.listen(PORT, () => console.log(`${SKIN.name} (Snap Lite) on port ${PORT}`)))
   .catch(e => { console.error(e); process.exit(1); });

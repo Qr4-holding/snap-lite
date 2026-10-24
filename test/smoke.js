@@ -1,5 +1,5 @@
 // Smoke tests that run against ANY running server (local or deployed):
-//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|all]
+//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|all]
 // Phase 2 and 3 create throw-away accounts @snaplite-test.invalid and remove them at the end.
 const http = require('http');
 const sharp = require('sharp');
@@ -206,6 +206,73 @@ async function phase3(ctx) {
   ok('owner deletes a job and its photos go too', gone.status === 200 && (await req(owner, 'GET', `/api/jobs/${id2}/status`)).status === 404);
 }
 
+async function phase4() {
+  console.log('\n== Phase 4: engine ==');
+  const { execFileSync } = require('child_process'); const fs = require('fs'); const os = require('os'), path = require('path');
+  const e = `owner4-${RUN}${TEST}`, pw = 'Owner-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ email: e, password: pw, name: 'T' }) });
+  const owner = (await login(e, pw)).p;
+  const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew4-${RUN}${TEST}` }) });
+  const crew = (await login(`crew4-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p;
+  const J = async (who, type) => (await req(who, 'POST', '/api/jobs', { json: { job_type: type }, headers: { accept: 'application/json' } })).json().id;
+  const dir = process.env.PHOTO_DIR, real = n => dir && fs.existsSync(path.join(dir, n)) ? fs.readFileSync(path.join(dir, n)) : null;
+  const wait = async (who, id, secs = 240) => { for (let i = 0; i < secs; i += 3) { const s = (await req(who, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') return s; await new Promise(r => setTimeout(r, 3000)); } return { state: 'timeout' }; };
+  const probe = async (who, id) => {
+    const r = await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: who.cookie } }); const f = path.join(os.tmpdir(), `sl-${RUN}-${id}.mp4`);
+    fs.writeFileSync(f, Buffer.from(await r.arrayBuffer()));
+    const q = (st, k) => execFileSync('ffprobe', ['-v', 'error', '-select_streams', st, '-show_entries', `stream=${k}`, '-of', 'csv=p=0', f]).toString().trim();
+    const o = { status: r.status, type: r.headers.get('content-type'), v: parseFloat(q('v', 'duration')), a: parseFloat(q('a', 'duration') || 0), size: q('v', 'width,height'), file: f, bytes: fs.statSync(f).size };
+    return o;
+  };
+  // portrait job with three photos
+  const id = await J(owner, 'Commercial yard');
+  ok('a job with no photos cannot be rendered', (await req(owner, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 400);
+  await upload(owner, id, 'before', 0, real('before.jpg') || await jpeg(1200, 1600));
+  await upload(owner, id, 'during', 0, real('work.jpg') || await jpeg(1200, 1600, { shade: 20 }));
+  await upload(owner, id, 'after', 0, real('after.jpg') || await jpeg(1200, 1600, { shade: 50 }));
+  const t0 = Date.now();
+  const go = await req(owner, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } });
+  ok('render starts', go.status === 200 && go.json().state === 'rendering', go.text);
+  const sOn = (await req(owner, 'GET', `/jobs/${id}`)).text;
+  ok('the review screen shows a progress message and polls while rendering', /Making your video/.test(sOn) && /api\/jobs\/\d+\/status/.test(sOn));
+  const st = await wait(owner, id);
+  ok('render finishes as ready (' + Math.round((Date.now() - t0) / 1000) + 's)', st.state === 'ready', JSON.stringify(st));
+  const pv = await probe(owner, id);
+  ok('video is served as mp4', pv.status === 200 && /video\/mp4/.test(pv.type) && pv.bytes > 50000, JSON.stringify(pv));
+  ok('portrait 1080x1920', pv.size === '1080,1920', pv.size);
+  ok('audio track exists and its length equals the video within one frame', pv.a > 0 && Math.abs(pv.a - pv.v) <= 0.0401, `${pv.a} vs ${pv.v}`);
+  ok('video length is a whole number of frames, about 13 s', Math.abs(pv.v * 25 - Math.round(pv.v * 25)) < 0.05 && pv.v > 11 && pv.v < 16, String(pv.v));
+  const rg = await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: owner.cookie, range: 'bytes=0-99' } });
+  ok('video supports seeking (range requests)', rg.status === 206 && (await rg.arrayBuffer()).byteLength === 100);
+  ok('video needs a session', (await fetch(`${BASE}/api/jobs/${id}/video`)).status === 401);
+  ok('cover image is served', (await fetch(`${BASE}/api/jobs/${id}/cover`, { headers: { cookie: owner.cookie } })).status === 200);
+  const rv = (await req(owner, 'GET', `/jobs/${id}`)).text;
+  ok('the review screen shows the video and an Approve button', /<video/.test(rv) && /Approve/.test(rv));
+  // crew rules
+  const cid = await J(crew, 'Garden');
+  ok('crew cannot see or fetch the owner video', (await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: crew.cookie } })).status === 404);
+  ok('crew cannot start a render on a job that is not theirs', (await req(crew, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 404);
+  await upload(crew, cid, 'before', 0, await jpeg(1200, 1600)); await upload(crew, cid, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
+  ok('crew can make a video of their own job', (await req(crew, 'POST', `/api/jobs/${cid}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 200);
+  // landscape and mixed, queued behind it
+  const lid = await J(owner, 'Garage');
+  await upload(owner, lid, 'before', 0, await jpeg(1600, 1200)); await upload(owner, lid, 'after', 0, await jpeg(1600, 1200, { shade: 40 }));
+  await req(owner, 'POST', `/api/jobs/${lid}/render`, { json: {}, headers: { accept: 'application/json' } });
+  const mid = await J(owner, 'Garden');
+  await upload(owner, mid, 'before', 0, await jpeg(1200, 1600)); await upload(owner, mid, 'during', 0, await jpeg(1600, 1200, { shade: 20 })); await upload(owner, mid, 'after', 0, await jpeg(1600, 1200, { shade: 40 }));
+  await req(owner, 'POST', `/api/jobs/${mid}/render`, { json: {}, headers: { accept: 'application/json' } });
+  ok('crew video finishes', (await wait(crew, cid)).state === 'ready');
+  ok('landscape job finishes', (await wait(owner, lid)).state === 'ready');
+  const pl = await probe(owner, lid);
+  ok('landscape photos give a 1920x1080 video, audio matching', pl.size === '1920,1080' && Math.abs(pl.a - pl.v) <= 0.0401, JSON.stringify(pl));
+  ok('mixed photos finish and follow the BEFORE photo (portrait)', (await wait(owner, mid)).state === 'ready' && (await probe(owner, mid)).size === '1080,1920');
+  // approve, then remake is blocked
+  const ap = await req(owner, 'POST', `/api/jobs/${id}/approve`, { json: {}, headers: { accept: 'application/json' } });
+  ok('owner approves the finished video', ap.status === 200);
+  ok('an approved video cannot be replaced by a remake', (await req(owner, 'POST', `/api/jobs/${id}/render`, { json: {}, headers: { accept: 'application/json' } })).status === 409);
+  ok('health still fine after renders', (await (await fetch(BASE + '/health')).json()).ok === true);
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -213,6 +280,7 @@ async function phase3(ctx) {
     if (['phase1', 'all'].includes(which)) await phase1();
     if (['phase2', 'all'].includes(which)) ctx = await phase2();
     if (['phase3', 'all'].includes(which)) await phase3(ctx);
+    if (['phase4', 'all'].includes(which)) await phase4();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
   console.log(`\n${pass} passed, ${fail} failed`);

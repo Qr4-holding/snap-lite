@@ -1,0 +1,105 @@
+// Render queue: turns a job's photos into the branded video with video/engine.py. One render at a time (the server is small).
+// Files live next to the photos: MEDIA_DIR/jobs/<id>/video.mp4 and cover.jpg. Only signed-in people of the same business can fetch them.
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+const { sameOrigin } = require('./lib/util');
+
+module.exports = function render({ app, pool, SKIN, acct, jobsMod, events }) {
+  const { needUser } = acct;
+  const queue = []; let busy = false;
+  const ENGINE = path.join(__dirname, 'video', 'engine.py');
+
+  const canRender = (u, j) => j && (u.role === 'owner' || j.user_id === u.id) && ['draft', 'failed', 'ready'].includes(j.state);
+
+  async function buildConfig(j) {
+    const dir = jobsMod.dirOf(j.id);
+    const ph = (await pool.query('SELECT kind,seq FROM job_photos WHERE job_id=$1 ORDER BY CASE kind WHEN \'before\' THEN 0 WHEN \'during\' THEN 1 ELSE 2 END, seq', [j.id])).rows;
+    if (!ph.some(p => p.kind === 'before') || !ph.some(p => p.kind === 'after')) throw new Error('Needs a BEFORE and an AFTER photo.');
+    const cfg = {
+      out: path.join(dir, 'video.tmp.mp4'), cover: path.join(dir, 'cover.tmp.jpg'), work: path.join(dir, 'work'),
+      orientation: j.orientation || 'auto',
+      brand: { logo: SKIN.logoFile, accent: SKIN.accent, strap: SKIN.tagline || '', web: SKIN.web || '', phone: SKIN.phone || '', email: SKIN.email || '' },
+      end_card: SKIN.end_card || { headline: '', button: '', hold_seconds: 5 },
+      photos: ph.slice(0, 5).map(p => ({ kind: p.kind, src: path.join(dir, `${p.kind}${p.seq}.jpg`) })),
+      voice: null, lines: []
+    };
+    // phase 5 writes voice.mp3 + lines.json next to the photos when a voice is chosen
+    const vf = path.join(dir, 'voice.mp3'), lf = path.join(dir, 'lines.json');
+    if (j.voice_id && fs.existsSync(vf) && fs.existsSync(lf)) { cfg.voice = vf; cfg.lines = JSON.parse(fs.readFileSync(lf, 'utf8')); }
+    return cfg;
+  }
+
+  function runEngine(cfgFile) {
+    return new Promise(resolve => {
+      const p = spawn('python3', ['-I', ENGINE, cfgFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '', err = '';
+      p.stdout.on('data', d => { out += d; }); p.stderr.on('data', d => { err += d; });
+      const timer = setTimeout(() => p.kill('SIGKILL'), 8 * 60 * 1000);
+      p.on('close', code => { clearTimeout(timer); resolve({ code, out, err }); });
+      p.on('error', e => { clearTimeout(timer); resolve({ code: -1, out, err: String(e) }); });
+    });
+  }
+
+  async function renderJob(id) {
+    const j = (await pool.query('SELECT * FROM jobs WHERE id=$1', [id])).rows[0];
+    if (!j || j.state !== 'rendering') return;
+    const dir = jobsMod.dirOf(id), t0 = Date.now();
+    try {
+      const cfg = await buildConfig(j); const cf = path.join(dir, 'render.json');
+      fs.writeFileSync(cf, JSON.stringify(cfg));
+      const r = await runEngine(cf);
+      const m = /RESULT (\{.*\})/.exec(r.out); const res = m ? JSON.parse(m[1]) : null;
+      if (r.code !== 0 || !res || !res.ok) throw new Error((res && res.errors && res.errors.join('; ')) || (r.err || 'Render failed').slice(-300));
+      fs.renameSync(cfg.out, path.join(dir, 'video.mp4')); fs.renameSync(cfg.cover, path.join(dir, 'cover.jpg'));
+      await pool.query("UPDATE jobs SET state='ready', video='video.mp4', cover='cover.jpg', dur=$2, render_error=NULL WHERE id=$1 AND state='rendering'", [id, String(res.duration)]);
+      events('rendered', null, id, `${res.duration}s in ${Math.round((Date.now() - t0) / 1000)}s`);
+    } catch (e) {
+      await pool.query("UPDATE jobs SET state='failed', render_error=$2 WHERE id=$1 AND state='rendering'", [id, String(e.message).slice(0, 300)]).catch(() => {});
+      events('render_failed', null, id, e.message);
+    } finally { fs.rm(path.join(dir, 'work'), { recursive: true, force: true }, () => {}); }
+  }
+
+  async function pump() {
+    if (busy) return; busy = true;
+    try { while (queue.length) { const id = queue.shift(); try { await renderJob(id); } catch (e) { console.error('render', id, e.message); } } }
+    finally { busy = false; }
+  }
+  const enqueue = id => { if (!queue.includes(id)) queue.push(id); pump(); };
+
+  async function start(user, id) {
+    const j = await jobsMod.getJob(user, id);
+    if (!j) return { code: 404, error: 'Job not found.' };
+    if (!canRender(user, j)) return { code: 409, error: 'This video cannot be remade now.' };
+    const ph = (await pool.query('SELECT kind FROM job_photos WHERE job_id=$1', [j.id])).rows.map(p => p.kind);
+    if (!ph.includes('before') || !ph.includes('after')) return { code: 400, error: 'Add a BEFORE and an AFTER photo first.' };
+    await pool.query("UPDATE jobs SET state='rendering', render_error=NULL WHERE id=$1", [j.id]);
+    events('render_start', user.id, j.id); enqueue(j.id);
+    return { code: 200, state: 'rendering' };
+  }
+
+  app.post('/api/jobs/:id/render', sameOrigin, needUser({ json: true }), async (req, res, next) => { try {
+    const r = await start(req.user, req.params.id);
+    res.status(r.code).json(r.error ? { error: r.error } : { ok: true, state: r.state });
+  } catch (e) { next(e); } });
+  app.post('/jobs/:id/render', sameOrigin, needUser(), async (req, res, next) => { try {
+    await start(req.user, req.params.id); res.redirect(303, `/jobs/${req.params.id}`);
+  } catch (e) { next(e); } });
+
+  const sendMedia = (name, type) => async (req, res, next) => { try {
+    const j = await jobsMod.getJob(req.user, req.params.id);
+    if (!j || !j.video || !['ready', 'approved', 'shared'].includes(j.state)) return res.status(404).end();
+    res.set({ 'Cache-Control': 'private, no-cache', 'Content-Type': type });
+    if (req.query.dl) res.set('Content-Disposition', `attachment; filename="${(SKIN.id || 'job')}-${j.id}.mp4"`);
+    res.sendFile(path.join(jobsMod.dirOf(j.id), name), { acceptRanges: true, headers: { 'Content-Type': type } }, err => { if (err && !res.headersSent) res.status(404).end(); });
+  } catch (e) { next(e); } };
+  app.get('/api/jobs/:id/video', needUser({ json: true }), sendMedia('video.mp4', 'video/mp4'));
+  app.get('/api/jobs/:id/cover', needUser({ json: true }), sendMedia('cover.jpg', 'image/jpeg'));
+
+  async function init() {
+    // anything left "rendering" by a restart goes back in the queue
+    const r = (await pool.query("SELECT id FROM jobs WHERE state='rendering' ORDER BY id")).rows;
+    r.forEach(x => queue.push(x.id)); if (r.length) { console.log('Re-queued renders:', r.map(x => x.id).join(',')); pump(); }
+  }
+  return { init, enqueue };
+};

@@ -150,7 +150,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events }) {
 
   // ---------- screens ----------
   const LABEL = { draft: 'Draft', rendering: 'Making video…', ready: 'Needs approval', approved: 'Ready to share', shared: 'Shared', failed: 'Failed' };
-  const jobCard = (r, mine) => `<a class="job" href="/jobs/${r.id}"><div class="th" style="background-image:url('/api/jobs/${r.id}/photos/${r.has_after ? 'after' : 'before'}/0?t=1')"></div><div><b>${esc(r.job_type || 'Job')}</b><span class="small">${new Date(r.created_at).toLocaleDateString('en-GB')}${mine ? '' : ' · by crew'}</span><br><span class="pill${['approved', 'ready'].includes(r.state) ? ' on' : ''}">${LABEL[r.state]}</span></div></a>`;
+  const jobCard = (r, mine) => `<a class="job" href="/jobs/${r.id}"><div class="th" style="background-image:url('${r.cover ? `/api/jobs/${r.id}/cover` : `/api/jobs/${r.id}/photos/${r.has_after ? 'after' : 'before'}/0?t=1`}')"></div><div><b>${esc(r.job_type || 'Job')}</b><span class="small">${new Date(r.created_at).toLocaleDateString('en-GB')}${mine ? '' : ' · by crew'}</span><br><span class="pill${['approved', 'ready'].includes(r.state) ? ' on' : ''}">${LABEL[r.state]}</span></div></a>`;
 
   app.get('/', needUser(), async (req, res, next) => { try {
     const u = req.user, rows = await visibleJobs(u);
@@ -244,15 +244,26 @@ note();
     const ph = await photosOf(j.id);
     const thumbs = ph.map(p => `<div class="shot has ${p.kind}" style="background-image:url('/api/jobs/${j.id}/photos/${p.kind}/${p.seq}?t=1')"><span class="tag">${p.kind.toUpperCase()}</span></div>`).join('');
     const owner = u.role === 'owner';
+    const hasBA = ph.some(p => p.kind === 'before') && ph.some(p => p.kind === 'after');
+    const mine = owner || j.user_id === u.id;
+    const done = ['ready', 'approved', 'shared'].includes(j.state);
+    const v = encodeURIComponent(j.dur || '') + (j.shared_at ? '' : '');
+    const player = done ? `<video id="vid" controls playsinline preload="metadata" poster="/api/jobs/${j.id}/cover" src="/api/jobs/${j.id}/video" style="width:100%;border-radius:14px;background:#000;max-height:70vh"></video>` : '';
+    const busy = j.state === 'rendering' ? '<p class="msg" id="busy">Making your video… this takes about a minute. You can leave this page open.</p>' : '';
+    const fail = j.state === 'failed' ? `<p class="msg bad">The video could not be made${j.render_error ? ': ' + esc(j.render_error) : ''}. Try again.</p>` : '';
+    const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
     res.set('Cache-Control', 'no-store').send(page('Job', `
 <h1>${esc(j.job_type || 'Job')}</h1><p><span class="pill on">${LABEL[j.state]}</span> <span class="small">${new Date(j.created_at).toLocaleString('en-GB')}</span></p>
-<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>
+${busy}${fail}${player}
+${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:16px">
-${canEdit(u, j) ? `<a class="btn" href="/jobs/${j.id}/capture">Add or retake photos</a>` : ''}
+${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<form method="post" action="/jobs/${j.id}/render"><button type="submit">${j.state === 'failed' ? 'Try again' : 'Make video'}</button></form>` : ''}
+${canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Add or retake photos</a>` : ''}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve"><button type="submit">Approve</button></form>` : ''}
+${mine && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/render"><button class="sec" type="submit">Make it again</button></form>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
 ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
-<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u }));
+<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll }));
   } catch (e) { next(e); } });
 
   return { init, getJob, removeJob, dirOf, STATES };
