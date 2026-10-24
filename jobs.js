@@ -13,7 +13,7 @@ const MEDIA_DIR = process.env.MEDIA_DIR || '/data/media';
 const JOBS_DIR = path.join(MEDIA_DIR, 'jobs');
 const STATES = ['draft', 'rendering', 'ready', 'approved', 'shared', 'failed'];
 
-module.exports = function jobs({ app, pool, SKIN, ui, acct, events }) {
+module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) {
   const { page, msg } = ui;
   const { needUser, needOwner } = acct;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
@@ -252,9 +252,11 @@ note();
     const busy = j.state === 'rendering' ? '<p class="msg" id="busy">Making your video… this takes about a minute. You can leave this page open.</p>' : '';
     const fail = j.state === 'failed' ? `<p class="msg bad">The video could not be made${j.render_error ? ': ' + esc(j.render_error) : ''}. Try again.</p>` : '';
     const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
+    const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
     res.set('Cache-Control', 'no-store').send(page('Job', `
 <h1>${esc(j.job_type || 'Job')}</h1><p><span class="pill on">${LABEL[j.state]}</span> <span class="small">${new Date(j.created_at).toLocaleString('en-GB')}</span></p>
 ${busy}${fail}${player}
+${sh ? sh.html : ''}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:16px">
 ${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<a class="btn" href="/jobs/${j.id}/voice">${j.state === 'failed' ? 'Try again' : 'Choose voice and make video'}</a>` : ''}
@@ -263,7 +265,7 @@ ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/appr
 ${mine && j.state === 'ready' ? `<a class="btn sec" href="/jobs/${j.id}/voice">Change voice or lines</a>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
 ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
-<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll }));
+<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll + (sh ? sh.script : '') }));
   } catch (e) { next(e); } });
 
   return { init, getJob, removeJob, dirOf, STATES };

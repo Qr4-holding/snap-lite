@@ -1,5 +1,5 @@
 // Smoke tests that run against ANY running server (local or deployed):
-//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|phase5|all]
+//   BASE_URL=https://... ADMIN_USER=admin ADMIN_PASSWORD=... node test/smoke.js [phase1|phase2|phase3|phase4|phase5|phase6|all]
 // Phase 2 and 3 create throw-away accounts @snaplite-test.invalid and remove them at the end.
 const http = require('http');
 const sharp = require('sharp');
@@ -335,6 +335,57 @@ async function phase5() {
   }
 }
 
+async function phase6() {
+  console.log('\n== Phase 6: approve and share ==');
+  const e = `owner6-${RUN}${TEST}`, pw = 'Owner-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ email: e, password: pw, name: 'T' }) });
+  const owner = (await login(e, pw)).p;
+  const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew6-${RUN}${TEST}` }) });
+  const crew = (await login(`crew6-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p;
+  const A = { headers: { accept: 'application/json' } };
+  const mk = async (who) => { const id = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id; await upload(who, id, 'before', 0, await jpeg(1200, 1600)); await upload(who, id, 'after', 0, await jpeg(1200, 1600, { shade: 50 }));
+    await req(who, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'EKP11. Skip the skip.' }) });
+    for (let i = 0; i < 120; i += 3) { const st = (await req(who, 'GET', `/api/jobs/${id}/status`)).json(); if (st.state !== 'rendering') break; await new Promise(r => setTimeout(r, 3000)); } return id; };
+  const id = await mk(owner);
+  const pre = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
+  ok('no link can be made before approval', pre.status === 409);
+  ok('a not-yet-approved job has no share buttons', !/Share video/.test((await req(owner, 'GET', `/jobs/${id}`)).text));
+  ok('owner approves', (await req(owner, 'POST', `/api/jobs/${id}/approve`, { json: {}, ...A })).status === 200);
+  const page = (await req(owner, 'GET', `/jobs/${id}`)).text;
+  ok('approved job shows Share video, Save to phone and Copy link', /Share video/.test(page) && /Save to phone/.test(page) && /Copy link/.test(page) && /navigator\.canShare/.test(page));
+  const dl = await fetch(`${BASE}/api/jobs/${id}/video?dl=1`, { headers: { cookie: owner.cookie } });
+  ok('Save to phone downloads the mp4', dl.status === 200 && /attachment/.test(dl.headers.get('content-disposition') || '') && /video\/mp4/.test(dl.headers.get('content-type')));
+  const lk = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
+  const url = lk.json().url;
+  ok('owner gets a signed link', lk.status === 200 && /\/job\/[a-f0-9]{12}\?e=\d+&s=[a-f0-9]{32}$/.test(url || ''), url);
+  const U = new URL(url); const path_ = U.pathname + U.search;
+  const open = await fetch(BASE + path_);
+  const html = await open.text();
+  ok('the signed link opens with no sign-in and shows the video and the phone number', open.status === 200 && /<video/.test(html) && /0785 046 4204/.test(html) && /og:video/.test(html));
+  ok('the public page is marked noindex', /noindex/.test(open.headers.get('x-robots-tag') || ''));
+  const vurl = html.match(/src="([^"]+\/video\?[^"]+)"/); const vsrc = vurl && vurl[1].replace(/&amp;/g, '&');
+  const vr = vsrc && await fetch(BASE + vsrc, { headers: { range: 'bytes=0-99' } });
+  ok('the signed video plays and seeks without a session', !!vr && vr.status === 206 && /video\/mp4/.test(vr.headers.get('content-type')));
+  ok('the same page without a signature is not found', (await fetch(BASE + U.pathname)).status === 404);
+  ok('a changed signature is not found', (await fetch(BASE + U.pathname + `?e=${U.searchParams.get('e')}&s=${'0'.repeat(32)}`)).status === 404);
+  ok('a changed expiry is not found', (await fetch(BASE + U.pathname + `?e=${+U.searchParams.get('e') + 1000}&s=${U.searchParams.get('s')}`)).status === 404);
+  ok('an expired link is not found', (await fetch(BASE + U.pathname + `?e=1000&s=${U.searchParams.get('s')}`)).status === 404);
+  ok('a signature does not work on another job slug', (await fetch(BASE + '/job/aaaaaaaaaaaa?' + U.search.slice(1))).status === 404);
+  ok('the signed video url without a signature is not found', (await fetch(BASE + U.pathname + '/video')).status === 404);
+  ok('crew cannot make links', (await req(crew, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A })).status === 403);
+  const sh = await req(owner, 'POST', `/api/jobs/${id}/shared`, { json: {}, ...A });
+  ok('sharing marks the job Shared', sh.status === 200 && sh.json().state === 'shared');
+  await req(owner, 'POST', `/api/jobs/${id}/shared`, { json: {}, ...A });
+  const pg2 = (await req(owner, 'GET', `/jobs/${id}`)).text;
+  ok('the screen shows how many times it was shared', /Shared 2 times/.test(pg2));
+  const ct = (await req(crew, 'GET', `/jobs/${id}`)).text;
+  ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/Share video/.test(ct) && !/Copy link/.test(ct));
+  const cid = await mk(crew);
+  ok('crew cannot approve or share their own job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
+  await req(owner, 'DELETE', `/api/jobs/${id}`);
+  ok('deleting the job kills its link', (await fetch(BASE + path_)).status === 404);
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -344,6 +395,7 @@ async function phase5() {
     if (['phase3', 'all'].includes(which)) await phase3(ctx);
     if (['phase4', 'all'].includes(which)) await phase4();
     if (['phase5', 'all'].includes(which)) await phase5();
+    if (['phase6', 'all'].includes(which)) await phase6();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
   console.log(`\n${pass} passed, ${fail} failed`);

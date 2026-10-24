@@ -91,7 +91,9 @@ ${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download t
 
 // ---------- modules ----------
 const acct = require('./accounts')({ app, pool, SKIN, ui, events });
-const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events });
+let shareMod;
+const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, getShare: () => shareMod });
+shareMod = require('./share')({ app, pool, SKIN, ui, acct, jobsMod, events });
 const secrets = require('./lib/secrets')(pool);
 const linesMod = require('./lines')(SKIN, secrets);
 let voiceMod, renderMod;
@@ -107,6 +109,7 @@ initDb()
   .then(() => adminMod.init())
   .then(() => acct.init())
   .then(() => jobsMod.init())
+  .then(() => shareMod.init())
   .then(() => renderMod.init())
   .then(() => app.listen(PORT, () => console.log(`${SKIN.name} (Snap Lite) on port ${PORT}`)))
   .catch(e => { console.error(e); process.exit(1); });
