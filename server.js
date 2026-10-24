@@ -74,11 +74,18 @@ app.get('/get/app.apk', (req, res) => fs.existsSync(APK)
   ? res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': `attachment; filename="${SKIN.id}-snap.apk"`, 'Cache-Control': 'no-cache' }).sendFile(APK)
   : res.status(404).type('text/plain').send('Not found'));
 app.get('/.well-known/assetlinks.json', (req, res) => { const f = path.join(__dirname, 'apk', 'assetlinks.json'); fs.existsSync(f) ? res.type('application/json').sendFile(f) : res.status(404).end(); });
-app.get('/get', (req, res) => {
+const QRCode = require('qrcode');
+const qrCache = new Map();
+async function qrSvg(url) { if (!qrCache.has(url)) qrCache.set(url, await QRCode.toString(url, { type: 'svg', margin: 1, width: 260, errorCorrectionLevel: 'M', color: { dark: SKIN.ink || '#1F2124', light: '#ffffff' } })); return qrCache.get(url); }
+app.get('/get/qr.svg', async (req, res, next) => { try { res.set('Cache-Control', 'no-cache').type('image/svg+xml').send(await qrSvg(`https://${req.get('host')}/get`)); } catch (e) { next(e); } });
+app.get('/get', async (req, res, next) => { try {
+  const qr = await qrSvg(`https://${req.get('host')}/get`);
   const have = fs.existsSync(APK), mb = have ? (fs.statSync(APK).size / 1048576).toFixed(1) : '';
   res.set('Cache-Control', 'no-cache').send(ui.page('Install the app', `
-<h1>Install ${SKIN.app_name || SKIN.name}</h1>
-${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${(fs.existsSync(path.join(__dirname, 'apk', 'version.txt')) ? fs.readFileSync(path.join(__dirname, 'apk', 'version.txt'), 'utf8').trim() : process.env.APP_VERSION) || ''}.</p>
+<h1 style="text-align:center;margin-bottom:4px">Get the ${SKIN.app_name || SKIN.name} app</h1>
+<p style="text-align:center;margin:0 0 12px;font-weight:700">Point your phone's camera at the code</p>
+<div style="width:min(300px,80vw);margin:0 auto 16px;padding:14px;border:4px solid var(--a);border-radius:20px;background:#fff;line-height:0">${qr.replace('<svg ', '<svg style="width:100%;height:auto" role="img" aria-label="QR code to install the app" ')}</div>
+${have ? `<h2 style="text-align:center">Or install it on this phone</h2><a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${(fs.existsSync(path.join(__dirname, 'apk', 'version.txt')) ? fs.readFileSync(path.join(__dirname, 'apk', 'version.txt'), 'utf8').trim() : process.env.APP_VERSION) || ''}.</p>
 <h2>Then, on your phone</h2>
 <ol style="padding-left:22px;display:grid;gap:10px">
 <li><b>Tap the download.</b> If Chrome says the file may be harmful, tap <b>Download anyway</b>. It is our own app.</li>
@@ -87,7 +94,7 @@ ${have ? `<a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download t
 <li>Tap <b>Install</b>, then <b>Open</b>. Sign in with the email and password you were given.</li></ol>
 <p class="small">If a Play Protect box appears, tap <b>More details</b> then <b>Install anyway</b>.</p>` : '<p class="msg">The app file is not ready yet.</p>'}
 <h2>No download?</h2><p>Open <b>${esc(req.get('host'))}</b> in Chrome and use the menu <b>⋮</b> → <b>Add to Home screen</b>.</p>`, {}));
-});
+} catch (e) { next(e); } });
 
 // ---------- modules ----------
 const acct = require('./accounts')({ app, pool, SKIN, ui, events });

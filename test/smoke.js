@@ -69,6 +69,11 @@ async function phase1() {
   ok('security headers present', h.headers.get('x-content-type-options') === 'nosniff' && /noindex/.test(h.headers.get('x-robots-tag') || ''));
 }
 
+async function phaseQr() {
+  const g = await fetch(BASE + '/get'); const t = await g.text();
+  ok('the install page shows a QR code and the download button', g.status === 200 && /<svg[^>]*aria-label="QR code/.test(t) && /Download the app/.test(t) && /Get the EKP11 Snap app/.test(t));
+  const q = await fetch(BASE + '/get/qr.svg'); ok('the QR code is served as an image', q.status === 200 && /svg/.test(q.headers.get('content-type')));
+}
 async function phase2() {
   console.log('\n== Phase 2: accounts and roles ==');
   if (!ADMIN_PW) { ok('ADMIN_PASSWORD supplied for admin tests', false, 'set ADMIN_PASSWORD'); return {}; }
@@ -419,7 +424,7 @@ async function engine() {
   console.log('Testing ' + BASE);
   try {
     let ctx;
-    if (['phase1', 'all'].includes(which)) await phase1();
+    if (['phase1', 'all'].includes(which)) { await phase1(); await phaseQr(); }
     if (['phase2', 'all'].includes(which)) ctx = await phase2();
     if (['phase3', 'all'].includes(which)) await phase3(ctx);
     if (['phase4', 'all'].includes(which)) await phase4();
