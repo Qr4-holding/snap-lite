@@ -10,8 +10,8 @@ module.exports = function mail(secrets, SKIN, TEST_DOMAIN) {
     if (!(await configured())) { console.warn('mail: not configured, message not sent'); return false; }
     const tr = nodemailer.createTransport({ host: 'smtp-relay.brevo.com', port: 587, secure: false, requireTLS: true,
       auth: { user: await secrets.get('brevo_login'), pass: await secrets.get('brevo_key') }, connectionTimeout: 15000, socketTimeout: 20000 });
-    await tr.sendMail({ from: `"${SKIN.name.replace(/["\r\n]/g, '')}" <${await secrets.get('mail_from')}>`, to, subject, text });
-    return true;
+    const info = await tr.sendMail({ from: `"${SKIN.name.replace(/["\r\n]/g, '')}" <${await secrets.get('mail_from')}>`, to, subject, text });
+    return { ok: true, response: String(info.response || '').slice(0, 200), accepted: info.accepted, rejected: info.rejected };
   }
   return { send, configured, outbox };
 };

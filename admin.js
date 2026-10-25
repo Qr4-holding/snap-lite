@@ -94,6 +94,13 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     res.json({ ok: true, expired: r.rowCount });
   } catch (e) { next(e); } });
 
+  // sends one real message and reports exactly what the mail server said (no secrets in the answer)
+  app.post('/admin/test-mail', auth, sameOrigin, form, async (req, res) => {
+    const to = clean(req.body.to, 120).toLowerCase();
+    try { res.json(await mailMod.send({ to, subject: `${SKIN.name}: email test`, text: 'This is a test message from your app. If you can read it, sending works.' })); }
+    catch (e) { res.status(502).json({ ok: false, error: String(e.message).slice(0, 300), code: e.code, responseCode: e.responseCode }); }
+  });
+
   app.post('/admin/keys', auth, sameOrigin, form, async (req, res, next) => { try {
     for (const k of ['elevenlabs_key', 'anthropic_key', 'brevo_login', 'brevo_key', 'mail_from']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
     res.redirect(303, '/admin?m=keys');
