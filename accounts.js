@@ -230,12 +230,12 @@ ${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div c
   const badLink = () => page('Link not valid', `<h1>This link has expired or been used</h1><p>Reset links work for ${RESET_MIN} minutes and only once.</p><a class="btn" href="/forgot">Send a new link</a>`);
   const validToken = async t => /^[a-f0-9]{64}$/.test(t || '') && (await pool.query('SELECT user_id FROM password_resets WHERE token_hash=$1 AND used_at IS NULL AND expires > now()', [sha(t)])).rows[0];
   app.get('/reset', async (req, res, next) => { try {
-    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin' });
     if (!(await validToken(req.query.t))) return res.status(410).send(badLink());
     res.send(page('New password', `<h1>Choose a new password</h1>${newPwForm('/reset', req.query.t, req.query.m === 'bad' ? 'The two passwords must match and be 8 or more characters.' : '')}`));
   } catch (e) { next(e); } });
   app.post('/reset', sameOrigin, form, async (req, res, next) => { try {
-    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin' });
     const t = String(req.body.t || ''), nx = String(req.body.next || '');
     if (!(await validToken(t))) return res.status(410).send(badLink());
     if (nx.length < 8 || nx !== String(req.body.again || '')) return res.redirect(303, `/reset?m=bad&t=${t}`);

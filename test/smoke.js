@@ -533,6 +533,9 @@ async function phaseReset() {
   const before = (await box(F.e)).length;
   const lim = await ask(F.e);
   ok('too many requests for one address give the same answer but no email', lim.text === known.text && (await box(F.e)).length === before);
+  ok('the reset page does not use no-referrer (browsers would send Origin: null and the form would be refused)', !/no-referrer/.test(pg.headers.get('referrer-policy') || '') && !/no-referrer/.test((await req(person(), 'GET', '/forgot')).headers.get('referrer-policy') || ''));
+  ok('the reset form posts fine with a same-site Origin header', (await req(person(), 'POST', '/reset', { body: form({ t: 'a'.repeat(64), next: 'x', again: 'x' }), headers: { origin: BASE } })).status === 410);
+  ok('and a foreign Origin is refused', (await req(person(), 'POST', '/reset', { body: form({ t: 'a'.repeat(64), next: 'x', again: 'x' }), headers: { origin: 'https://evil.example' } })).status === 403);
   ok('the reset page is not cached or indexed', /no-store/.test(pg.headers.get('cache-control') || ''));
 }
 
