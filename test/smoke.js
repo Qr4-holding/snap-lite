@@ -462,8 +462,11 @@ async function phaseReset() {
   const a = (await login(A.e, A.pw)).p;
   // ---- part 1: an owner resets another user's password
   const sp = (await req(a, 'GET', '/settings')).text;
-  const bid = (sp.match(/\/settings\/users\/(\d+)\/reset/g) || []).map(x => x.match(/(\d+)/)[1]);
-  const idB = await (async () => { for (const id of bid) { const r = await req(a, 'POST', `/settings/users/${id}/reset`); if (r.text.includes(B.e)) return { id, text: r.text }; } return null; })();
+  const bid = (sp.match(/\/settings\/users\/(\d+)\/reset/g) || []);
+  const idB = await (async () => {
+    const m = sp.match(new RegExp(B.e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\s\\S]{0,300}?/settings/users/(\\d+)/reset'));
+    if (!m) return null; const r = await req(a, 'POST', `/settings/users/${m[1]}/reset`); return r.text.includes(B.e) ? { id: m[1], text: r.text } : null;
+  })();
   ok('Settings lists people with a Reset password button', bid.length > 0);
   ok('the owner can reset another owner, and the one-time password is shown', !!idB && /one-time password/.test(idB.text));
   const otp = idB && (idB.text.match(/font-size:22px">([A-Za-z0-9]+)</) || [])[1];
