@@ -454,6 +454,85 @@ async function phase6() {
   ok('deleting the job kills its link', (await fetch(BASE + path_)).status === 404);
 }
 
+async function phaseReset() {
+  console.log('\n== Password reset ==');
+  if (!ADMIN_PW) { ok('ADMIN_PASSWORD supplied', false, 'set ADMIN_PASSWORD'); return; }
+  const mkOwner = async (tag) => { const e = `${tag}-${RUN}${TEST}`, pw = 'Start-pass-' + RUN; await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'T', email: e, password: pw }) }); return { e, pw }; };
+  const A = await mkOwner('rsA'), B = await mkOwner('rsB');
+  const a = (await login(A.e, A.pw)).p;
+  // ---- part 1: an owner resets another user's password
+  const sp = (await req(a, 'GET', '/settings')).text;
+  const bid = (sp.match(/\/settings\/users\/(\d+)\/reset/g) || []).map(x => x.match(/(\d+)/)[1]);
+  const idB = await (async () => { for (const id of bid) { const r = await req(a, 'POST', `/settings/users/${id}/reset`); if (r.text.includes(B.e)) return { id, text: r.text }; } return null; })();
+  ok('Settings lists people with a Reset password button', bid.length > 0);
+  ok('the owner can reset another owner, and the one-time password is shown', !!idB && /one-time password/.test(idB.text));
+  const otp = idB && (idB.text.match(/font-size:22px">([A-Za-z0-9]+)</) || [])[1];
+  ok('a one-time password was produced', !!otp && otp.length >= 8, String(otp));
+  ok('the old password no longer works', (await login(B.e, B.pw)).r.status === 401);
+  const lb = await login(B.e, otp || 'x');
+  ok('the one-time password signs in', lb.r.status === 303 && !!lb.p.cookie);
+  const b = lb.p;
+  const hb = await req(b, 'GET', '/');
+  ok('and the person is sent to choose their own password', hb.status === 302 && /change-password/.test(hb.loc), hb.status + ' ' + hb.loc);
+  ok('the API is blocked until they do', (await req(b, 'GET', '/api/jobs')).status === 403);
+  const cp0 = await req(b, 'GET', '/change-password');
+  ok('the choose-a-password screen is shown', cp0.status === 200 && /Choose your own password/.test(cp0.text));
+  const bad = await req(b, 'POST', '/change-password', { body: form({ next: 'Newer-pass-1', again: 'different' }) });
+  ok('mismatching passwords are refused', /m=bad/.test(bad.loc) && (await req(b, 'GET', '/')).status === 302);
+  const good = await req(b, 'POST', '/change-password', { body: form({ next: 'Newer-pass-1', again: 'Newer-pass-1' }) });
+  ok('a new password is accepted', good.status === 303 && (await req(b, 'GET', '/')).status === 200);
+  ok('the one-time password is dead', (await login(B.e, otp)).r.status === 401);
+  ok('the new password signs in with no forced change', (await req((await login(B.e, 'Newer-pass-1')).p, 'GET', '/')).status === 200);
+  ok('resetting someone who does not exist is refused', (await req(a, 'POST', '/settings/users/99999999/reset')).status === 404);
+  const old = lb.p.cookie;
+  await req(a, 'POST', `/settings/users/${idB.id}/reset`);
+  ok('resetting signs the person out everywhere', (await req({ cookie: old }, 'GET', '/api/jobs')).status === 401);
+  ok('a signed-out visitor cannot reset anyone', (await req(person(), 'POST', `/settings/users/${idB.id}/reset`)).loc.includes('/login'));
+
+  // ---- part 2: Forgot password?
+  ok('the sign-in screen has a Forgot password link', /href="\/forgot"/.test((await req(person(), 'GET', '/login')).text));
+  const F = await mkOwner('rsF');
+  const ask = async (email) => req(person(), 'POST', '/forgot', { body: form({ email }) });
+  const known = await ask(F.e), unknown = await ask(`nobody-${RUN}${TEST}`);
+  ok('the same answer is given whether or not the email exists', known.status === 200 && unknown.status === 200 && known.text === unknown.text && /If that email address has an account/.test(known.text));
+  const box = async (email) => (await req(admin(), 'GET', '/admin/outbox?to=' + encodeURIComponent(email))).json();
+  let mails = await box(F.e);
+  ok('a reset email was produced for the real address', mails.length === 1 && /\/reset\?t=[a-f0-9]{64}/.test(mails[0].text), JSON.stringify(mails).slice(0, 120));
+  ok('and none for an unknown address', (await box(`nobody-${RUN}${TEST}`)).length === 0);
+  const link1 = (mails[0].text.match(/https:\/\/[^\s]+\/reset\?t=[a-f0-9]{64}/) || [''])[0];
+  const path1 = link1.replace(/^https:\/\/[^/]+/, '');
+  const tok1 = path1.split('t=')[1];
+  const pg = await req(person(), 'GET', path1);
+  ok('the link opens a new-password form', pg.status === 200 && /Choose a new password/.test(pg.text));
+  ok('opening the link does not use it up', (await req(person(), 'GET', path1)).status === 200);
+  const rb = await req(person(), 'POST', '/reset', { body: form({ t: tok1, next: 'short', again: 'short' }) });
+  ok('a too-short password is refused and the link still works', /m=bad/.test(rb.loc) && (await req(person(), 'GET', path1)).status === 200);
+  // a second request replaces the first link
+  await ask(F.e);
+  mails = await box(F.e);
+  ok('a newer request gives a newer link', mails.length === 2);
+  ok('and the older link stops working', (await req(person(), 'GET', path1)).status === 410);
+  const path2 = mails[1].text.match(/\/reset\?t=[a-f0-9]{64}/)[0], tok2 = path2.split('t=')[1];
+  const rs = await req(person(), 'POST', '/reset', { body: form({ t: tok2, next: 'Fresh-pass-77', again: 'Fresh-pass-77' }) });
+  ok('the reset sets the new password', rs.status === 303 && /m=reset/.test(rs.loc));
+  ok('the old password no longer works', (await login(F.e, F.pw)).r.status === 401);
+  ok('the new password signs in', (await login(F.e, 'Fresh-pass-77')).r.status === 303);
+  ok('the link cannot be used twice', (await req(person(), 'GET', path2)).status === 410 && (await req(person(), 'POST', '/reset', { body: form({ t: tok2, next: 'Again-pass-88', again: 'Again-pass-88' }) })).status === 410);
+  ok('the second password never took', (await login(F.e, 'Again-pass-88')).r.status === 401);
+  // expiry
+  await ask(F.e); // 3rd request this hour for this address: the last allowed
+  mails = await box(F.e);
+  const tok3 = mails[mails.length - 1].text.match(/t=([a-f0-9]{64})/)[1];
+  const ex = await req(admin(), 'POST', '/admin/expire-resets', { body: form({ email: F.e }) });
+  ok('an expired link is refused (30 minute limit)', ex.json().expired >= 1 && (await req(person(), 'GET', '/reset?t=' + tok3)).status === 410 && (await req(person(), 'POST', '/reset', { body: form({ t: tok3, next: 'Late-pass-99', again: 'Late-pass-99' }) })).status === 410);
+  ok('a made-up token is refused', (await req(person(), 'GET', '/reset?t=' + 'a'.repeat(64))).status === 410 && (await req(person(), 'GET', '/reset?t=abc')).status === 410);
+  // limit: 3 requests per address per hour
+  const before = (await box(F.e)).length;
+  const lim = await ask(F.e);
+  ok('too many requests for one address give the same answer but no email', lim.text === known.text && (await box(F.e)).length === before);
+  ok('the reset page is not cached or indexed', /no-store/.test(pg.headers.get('cache-control') || ''));
+}
+
 async function engine() {
   console.log('\n== Engine timing (local, no server) ==');
   const r = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'engine_timing.py')], { encoding: 'utf8' });
@@ -475,6 +554,7 @@ async function engine() {
     if (['phase4', 'all'].includes(which)) await phase4();
     if (['phase5', 'all'].includes(which)) await phase5();
     if (['phase6', 'all'].includes(which)) await phase6();
+    if (['reset', 'all'].includes(which)) await phaseReset();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }

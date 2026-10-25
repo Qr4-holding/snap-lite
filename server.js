@@ -97,16 +97,18 @@ ${have ? `<h2 style="text-align:center">Or install it on this phone</h2><a class
 } catch (e) { next(e); } });
 
 // ---------- modules ----------
-const acct = require('./accounts')({ app, pool, SKIN, ui, events });
+const secrets = require('./lib/secrets')(pool);
+let mailMod;
+const acct = require('./accounts')({ app, pool, SKIN, ui, events, getMail: () => mailMod });
+mailMod = require('./mail')(secrets, SKIN, acct.TEST_DOMAIN);
 let shareMod;
 const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, getShare: () => shareMod });
 shareMod = require('./share')({ app, pool, SKIN, ui, acct, jobsMod, events });
-const secrets = require('./lib/secrets')(pool);
 const linesMod = require('./lines')(SKIN, secrets);
 let voiceMod, renderMod;
 renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod });
 voiceMod = require('./voice')({ app, pool, SKIN, ui, acct, jobsMod, getRender: () => renderMod, events, secrets, linesMod });
-const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets });
+const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets, mailMod });
 
 app.use((req, res) => res.status(404).type('text/plain').send('Not found'));
 process.on('unhandledRejection', e => console.error('Unhandled:', e && e.message));

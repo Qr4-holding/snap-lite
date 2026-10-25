@@ -7,7 +7,7 @@ const { clean, esc, hashPw, sameOrigin } = require('./lib/util');
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/backups';
 
-module.exports = function admin({ app, pool, SKIN, acct, jobsMod, secrets }) {
+module.exports = function admin({ app, pool, SKIN, acct, jobsMod, secrets, mailMod }) {
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   let ADMIN_USER = process.env.ADMIN_USER || 'admin';
   const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -49,7 +49,7 @@ table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px
 <nav><a href="/admin">Overview</a><a href="/admin/jobs">All jobs</a></nav>${body}</body></html>`;
 
   app.get('/admin', auth, async (req, res, next) => { try {
-    const keyState = { el: await secrets.has('elevenlabs_key'), an: await secrets.has('anthropic_key') };
+    const keyState = { el: await secrets.has('elevenlabs_key'), an: await secrets.has('anthropic_key'), mail: await mailMod.configured() };
     const b = (await pool.query('SELECT * FROM businesses WHERE slug=$1', [SKIN.id])).rows[0];
     const users = b ? (await pool.query('SELECT id,email,role,created_at,deleted_at FROM users WHERE biz_id=$1 ORDER BY id', [b.id])).rows : [];
     const counts = (await pool.query('SELECT state, count(*)::int n FROM jobs GROUP BY state ORDER BY state')).rows;
@@ -62,7 +62,7 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
 <h2>Jobs by state</h2><p>${counts.map(c => `${esc(c.state)}: ${c.n}`).join(' · ') || 'No jobs yet.'}</p>
 <h2>Backups</h2><ul>${listBackups().map(f => `<li><a href="/admin/backup/${esc(f)}">${esc(f)}</a></li>`).join('') || '<li>The first backup appears after tonight.</li>'}</ul>
 <h2>Sign-in details</h2><form class="card" method="post" action="/admin/password"><label>Username<input name="user" value="${esc(ADMIN_USER)}" required minlength="3"></label><label>Current password<input name="current" type="password" required autocomplete="current-password"></label><label>New password (12 or more, blank keeps current)<input name="next" type="password" minlength="12" autocomplete="new-password"></label><label>New password again<input name="again" type="password" minlength="12" autocomplete="new-password"></label><button type="submit">Save</button></form>
-<h2>Voice and writing keys</h2><p class="small">ElevenLabs: ${keyState.el ? 'set' : 'not set'} · Anthropic: ${keyState.an ? 'set' : 'not set'}. Pasted keys are stored on the server and never shown again; leave a box blank to keep the current key.</p><form class="card" method="post" action="/admin/keys"><label>ElevenLabs API key<input name="elevenlabs_key" type="password" autocomplete="off"></label><label>Anthropic API key<input name="anthropic_key" type="password" autocomplete="off"></label><button type="submit">Save keys</button></form>
+<h2>Voice and writing keys</h2><p class="small">ElevenLabs: ${keyState.el ? 'set' : 'not set'} · Anthropic: ${keyState.an ? 'set' : 'not set'}. Pasted keys are stored on the server and never shown again; leave a box blank to keep the current key.</p><form class="card" method="post" action="/admin/keys"><label>ElevenLabs API key<input name="elevenlabs_key" type="password" autocomplete="off"></label><label>Anthropic API key<input name="anthropic_key" type="password" autocomplete="off"></label><h2>Password reset email (Brevo SMTP)</h2><p class="small">Email sending: ${keyState.mail ? 'ready' : 'not set'}. Needs the Brevo SMTP login, the SMTP key, and a sender address verified in Brevo.</p><label>Brevo SMTP login<input name="brevo_login" autocomplete="off"></label><label>Brevo SMTP key<input name="brevo_key" type="password" autocomplete="off"></label><label>Send from (verified address)<input name="mail_from" type="email" autocomplete="off"></label><button type="submit">Save keys</button></form>
 <h2>Test data</h2><form method="post" action="/admin/purge-test" onsubmit="return confirm('Remove test accounts and their jobs?')"><button class="del" type="submit">Remove test accounts (@snaplite-test.invalid)</button></form>`));
   } catch (e) { next(e); } });
 
@@ -81,8 +81,21 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     res.json({ ok: true });
   } catch (e) { next(e); } });
 
+  // test helpers: only ever about @snaplite-test.invalid addresses
+  app.get('/admin/outbox', auth, (req, res) => {
+    const to = String(req.query.to || '');
+    if (!to.endsWith(acct.TEST_DOMAIN)) return res.status(400).json({ error: 'Test addresses only.' });
+    res.set('Cache-Control', 'no-store').json(mailMod.outbox.filter(m => m.to === to));
+  });
+  app.post('/admin/expire-resets', auth, sameOrigin, form, async (req, res, next) => { try {
+    const to = clean(req.body.email, 120).toLowerCase();
+    if (!to.endsWith(acct.TEST_DOMAIN)) return res.status(400).json({ error: 'Test addresses only.' });
+    const r = await pool.query("UPDATE password_resets SET expires=now() - interval '1 minute' WHERE used_at IS NULL AND user_id IN (SELECT id FROM users WHERE email=$1)", [to]);
+    res.json({ ok: true, expired: r.rowCount });
+  } catch (e) { next(e); } });
+
   app.post('/admin/keys', auth, sameOrigin, form, async (req, res, next) => { try {
-    for (const k of ['elevenlabs_key', 'anthropic_key']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
+    for (const k of ['elevenlabs_key', 'anthropic_key', 'brevo_login', 'brevo_key', 'mail_from']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
     res.redirect(303, '/admin?m=keys');
   } catch (e) { next(e); } });
   app.get('/admin/usage', auth, async (req, res, next) => { try {

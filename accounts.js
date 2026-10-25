@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { clean, esc, slugify, EMAIL, hashPw, checkPw, cookies, sameOrigin, limited } = require('./lib/util');
 
-module.exports = function accounts({ app, pool, SKIN, ui, events }) {
+module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const { page, msg } = ui;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const SESSION_DAYS = 180;
@@ -17,6 +17,10 @@ module.exports = function accounts({ app, pool, SKIN, ui, events }) {
     await pool.query(`CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY, biz_id INT NOT NULL REFERENCES businesses(id), email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('owner','crew')), name TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), deleted_at TIMESTAMPTZ)`);
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change BOOLEAN NOT NULL DEFAULT false');
+    await pool.query(`CREATE TABLE IF NOT EXISTS password_resets (
+      token_hash TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    await pool.query('DELETE FROM password_resets WHERE expires < now() - interval \'1 day\'');
     await pool.query(`CREATE TABLE IF NOT EXISTS biz_sessions (
       token TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, biz_id INT NOT NULL, expires TIMESTAMPTZ NOT NULL)`);
     await pool.query('ALTER TABLE biz_sessions ADD COLUMN IF NOT EXISTS user_id INT');
@@ -27,7 +31,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events }) {
   async function current(req) {
     const t = cookies(req).sl;
     if (!t || !/^[a-f0-9]{48}$/.test(t)) return null;
-    const r = (await pool.query(`SELECT u.id, u.biz_id, u.email, u.role, u.name, b.name AS biz_name, b.slug AS biz_slug
+    const r = (await pool.query(`SELECT u.id, u.biz_id, u.email, u.role, u.name, u.must_change, b.name AS biz_name, b.slug AS biz_slug
       FROM biz_sessions s JOIN users u ON u.id=s.user_id JOIN businesses b ON b.id=u.biz_id
       WHERE s.token=$1 AND s.expires > now() AND u.deleted_at IS NULL AND b.status='active'`, [t])).rows[0];
     if (r && r.role === 'crew' && !SKIN.crew_enabled) return null;
@@ -49,6 +53,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events }) {
     try {
       const u = await current(req);
       if (!u) return opts.json || req.path.startsWith('/api/') ? res.status(401).json({ error: 'Please sign in.' }) : res.redirect(302, '/login');
+      if (u.must_change) return opts.json || req.path.startsWith('/api/') ? res.status(403).json({ error: 'Please choose a new password first.', must_change: true }) : res.redirect(302, '/change-password');
       req.user = u; next();
     } catch (e) { next(e); }
   };
@@ -93,11 +98,12 @@ ${msg(m, true)}
 <label class="f">Password<input name="password" type="password" required autocomplete="current-password"></label>
 <button type="submit">Sign in</button>
 </form>
+<p><a href="/forgot">Forgot password?</a></p>
 <p class="small">No account yet? Accounts are set up for you. Ask ${esc(SKIN.name)} to add you.</p>`);
 
   app.get('/login', async (req, res, next) => { try {
     if (await current(req)) return res.redirect(302, '/');
-    res.set('Cache-Control', 'no-store').send(signInPage(req.query.m === 'bye' ? 'Signed out.' : req.query.m === 'gone' ? 'Your account has been deleted.' : ''));
+    res.set('Cache-Control', 'no-store').send(signInPage(req.query.m === 'bye' ? 'Signed out.' : req.query.m === 'gone' ? 'Your account has been deleted.' : req.query.m === 'reset' ? 'Password changed. Please sign in.' : ''));
   } catch (e) { next(e); } });
 
   app.post('/login', sameOrigin, form, async (req, res, next) => { try {
@@ -116,6 +122,7 @@ ${msg(m, true)}
   app.get('/settings', needUser(), async (req, res, next) => { try {
     const u = req.user;
     const crew = u.role === 'owner' ? (await pool.query(`SELECT id,email,name,created_at FROM users WHERE biz_id=$1 AND role='crew' AND deleted_at IS NULL ORDER BY id`, [u.biz_id])).rows : [];
+    const people = u.role === 'owner' ? (await pool.query(`SELECT id,email,role FROM users WHERE biz_id=$1 AND id<>$2 AND deleted_at IS NULL ORDER BY id`, [u.biz_id, u.id])).rows : [];
     const q = req.query, flash = { invited: '', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
     res.set('Cache-Control', 'no-store').send(page('Settings', `
@@ -124,6 +131,7 @@ ${msg(m, true)}
 ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
 <form class="card" method="post" action="/settings/invite"><label class="f">Crew email<input name="email" type="email" required inputmode="email"></label><button type="submit">Create crew login</button><span class="small">Crew can take photos and make videos. Only you can approve and share.</span></form>` : ''}
+${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div class="jobs">${people.map(c => `<div class="card"><b>${esc(c.email)}</b> <span class="small">(${c.role})</span><form method="post" action="/settings/users/${c.id}/reset" onsubmit="return confirm('Reset this password? They will be signed out.')"><button class="sec small" type="submit">Reset password</button></form></div>`).join('')}</div>` : ''}
 <h2>Change password</h2>
 <form class="card" method="post" action="/settings/password"><label class="f">Current password<input name="current" type="password" required autocomplete="current-password"></label><label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>
 <h2>App</h2><p class="small">Version <span id="v">${esc(process.env.APP_VERSION || 'dev')}</span></p>
@@ -153,7 +161,7 @@ ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c
     const row = (await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.user.id])).rows[0];
     const nx = String(req.body.next || '');
     if (!row || !checkPw(String(req.body.current || ''), row.password_hash) || nx.length < 8) return res.redirect(303, '/settings?m=badpw');
-    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hashPw(nx), req.user.id]);
+    await pool.query('UPDATE users SET password_hash=$1, must_change=false WHERE id=$2', [hashPw(nx), req.user.id]);
     res.redirect(303, '/settings?m=pw');
   } catch (e) { next(e); } });
 
@@ -164,6 +172,79 @@ ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c
     await softDelete(req.user.id);
     signOut(req, res);
     res.redirect(303, '/login?m=gone');
+  } catch (e) { next(e); } });
+
+  // ---------- password reset ----------
+  // (1) the owner resets someone's password to a one-time password, shown once; they must choose their own at next sign-in
+  app.post('/settings/users/:id/reset', sameOrigin, needUser(), needOwner, async (req, res, next) => { try {
+    const id = parseInt(req.params.id, 10) || 0;
+    const t = (await pool.query('SELECT id,email,role FROM users WHERE id=$1 AND biz_id=$2 AND deleted_at IS NULL', [id, req.user.biz_id])).rows[0];
+    if (!t || t.id === req.user.id) return res.status(t ? 400 : 404).send(page('Not reset', `<h1>Not reset</h1><p>${t ? 'To change your own password use Change password below.' : 'That person was not found.'}</p><a class="btn" href="/settings">Back to Settings</a>`));
+    const pw = tempPassword();
+    await pool.query('UPDATE users SET password_hash=$1, must_change=true WHERE id=$2', [hashPw(pw), t.id]);
+    await pool.query('DELETE FROM biz_sessions WHERE user_id=$1', [t.id]);
+    await pool.query('UPDATE password_resets SET used_at=now() WHERE user_id=$1 AND used_at IS NULL', [t.id]);
+    events('password_reset_by_owner', req.user.id);
+    res.set('Cache-Control', 'no-store').send(page('Password reset', `<h1>Password reset</h1>
+<p>Give <b>${esc(t.email)}</b> this one-time password now. It is not shown again: <b style="font-size:22px">${esc(pw)}</b></p>
+<p class="small">They are signed out everywhere, and will be asked to choose their own password when they sign in.</p><a class="btn" href="/settings">Back to Settings</a>`));
+  } catch (e) { next(e); } });
+
+  // forced change after a one-time password
+  const newPwForm = (action, token, m) => `${msg(m, true)}<form class="card" method="post" action="${action}">${token ? `<input type="hidden" name="t" value="${esc(token)}">` : ''}
+<label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label>
+<label class="f">Type it again<input name="again" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>`;
+  app.get('/change-password', async (req, res, next) => { try {
+    const u = await current(req); if (!u) return res.redirect(302, '/login'); if (!u.must_change) return res.redirect(302, '/');
+    res.set('Cache-Control', 'no-store').send(page('Choose a password', `<h1>Choose your own password</h1><p>You signed in with a one-time password. Please choose your own now.</p>${newPwForm('/change-password', '', req.query.m === 'bad' ? 'The two passwords must match and be 8 or more characters.' : '')}`));
+  } catch (e) { next(e); } });
+  app.post('/change-password', sameOrigin, form, async (req, res, next) => { try {
+    const u = await current(req); if (!u) return res.redirect(303, '/login');
+    const nx = String(req.body.next || '');
+    if (nx.length < 8 || nx !== String(req.body.again || '')) return res.redirect(303, '/change-password?m=bad');
+    await pool.query('UPDATE users SET password_hash=$1, must_change=false WHERE id=$2', [hashPw(nx), u.id]);
+    res.redirect(303, '/');
+  } catch (e) { next(e); } });
+
+  // (2) "Forgot password?": emailed link, 30 minutes, one use. The answer never reveals whether the email has an account.
+  const RESET_MIN = 30, sha = t => crypto.createHash('sha256').update(t).digest('hex');
+  const forgotDone = () => page('Check your email', `<h1>Check your email</h1><p>If that email address has an account, we have sent a link to reset the password. It works for ${RESET_MIN} minutes and can be used once.</p><a class="btn" href="/login">Back to sign in</a>`);
+  app.get('/forgot', (req, res) => res.set('Cache-Control', 'no-store').send(page('Forgot password', `<h1>Forgot password?</h1><p>Enter your email and we will send you a link to choose a new password.</p>
+<form class="card" method="post" action="/forgot"><label class="f">Email<input name="email" type="email" required autocomplete="email" inputmode="email"></label><button type="submit">Send reset link</button></form><p><a href="/login">Back to sign in</a></p>`)));
+  app.post('/forgot', sameOrigin, form, async (req, res, next) => { try {
+    const email = clean(req.body.email, 120).toLowerCase();
+    const blocked = limited('forgot-ip:' + req.ip, 10) | limited('forgot:' + email, 3);
+    res.set('Cache-Control', 'no-store').send(forgotDone());
+    if (blocked || !EMAIL.test(email)) return;
+    const u = (await pool.query(`SELECT u.* FROM users u JOIN businesses bz ON bz.id=u.biz_id WHERE u.email=$1 AND u.deleted_at IS NULL AND bz.status='active'`, [email])).rows[0];
+    if (!u || (u.role === 'crew' && !SKIN.crew_enabled)) return;
+    const token = crypto.randomBytes(32).toString('hex');
+    await pool.query('UPDATE password_resets SET used_at=now() WHERE user_id=$1 AND used_at IS NULL', [u.id]);
+    await pool.query(`INSERT INTO password_resets (token_hash,user_id,expires) VALUES ($1,$2,now() + interval '${RESET_MIN} minutes')`, [sha(token), u.id]);
+    events('reset_requested', u.id);
+    const link = `https://${req.get('host')}/reset?t=${token}`;
+    getMail().send({ to: u.email, subject: `Reset your ${SKIN.name} password`, text: `Hello,\n\nUse this link to choose a new ${SKIN.name} password. It works for ${RESET_MIN} minutes and can be used once:\n\n${link}\n\nIf you did not ask for this, ignore this email. Your password has not changed.\n` })
+      .catch(e => console.error('reset mail failed:', e.message));
+  } catch (e) { next(e); } });
+
+  const badLink = () => page('Link not valid', `<h1>This link has expired or been used</h1><p>Reset links work for ${RESET_MIN} minutes and only once.</p><a class="btn" href="/forgot">Send a new link</a>`);
+  const validToken = async t => /^[a-f0-9]{64}$/.test(t || '') && (await pool.query('SELECT user_id FROM password_resets WHERE token_hash=$1 AND used_at IS NULL AND expires > now()', [sha(t)])).rows[0];
+  app.get('/reset', async (req, res, next) => { try {
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    if (!(await validToken(req.query.t))) return res.status(410).send(badLink());
+    res.send(page('New password', `<h1>Choose a new password</h1>${newPwForm('/reset', req.query.t, req.query.m === 'bad' ? 'The two passwords must match and be 8 or more characters.' : '')}`));
+  } catch (e) { next(e); } });
+  app.post('/reset', sameOrigin, form, async (req, res, next) => { try {
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    const t = String(req.body.t || ''), nx = String(req.body.next || '');
+    if (!(await validToken(t))) return res.status(410).send(badLink());
+    if (nx.length < 8 || nx !== String(req.body.again || '')) return res.redirect(303, `/reset?m=bad&t=${t}`);
+    const used = (await pool.query('UPDATE password_resets SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires > now() RETURNING user_id', [sha(t)])).rows[0];
+    if (!used) return res.status(410).send(badLink());
+    await pool.query('UPDATE users SET password_hash=$1, must_change=false WHERE id=$2', [hashPw(nx), used.user_id]);
+    await pool.query('DELETE FROM biz_sessions WHERE user_id=$1', [used.user_id]);
+    events('password_reset_by_link', used.user_id);
+    res.redirect(303, '/login?m=reset');
   } catch (e) { next(e); } });
 
   app.get('/api/version', (req, res) => res.set('Cache-Control', 'no-store').json({ version: process.env.APP_VERSION || 'dev', apk: process.env.ANDROID_APK_URL || '' }));
