@@ -457,7 +457,7 @@ async function phase6() {
 async function phaseReset() {
   console.log('\n== Password reset ==');
   if (!ADMIN_PW) { ok('ADMIN_PASSWORD supplied', false, 'set ADMIN_PASSWORD'); return; }
-  const mkOwner = async (tag) => { const e = `${tag}-${RUN}${TEST}`, pw = 'Start-pass-' + RUN; await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'T', email: e, password: pw }) }); return { e, pw }; };
+  const mkOwner = async (tag) => { const e = `${tag}-${RUN}${TEST}`.toLowerCase(), pw = 'Start-pass-' + RUN; await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'T', email: e, password: pw }) }); return { e, pw }; };
   const A = await mkOwner('rsA'), B = await mkOwner('rsB');
   const a = (await login(A.e, A.pw)).p;
   // ---- part 1: an owner resets another user's password
@@ -496,12 +496,12 @@ async function phaseReset() {
   ok('the sign-in screen has a Forgot password link', /href="\/forgot"/.test((await req(person(), 'GET', '/login')).text));
   const F = await mkOwner('rsF');
   const ask = async (email) => req(person(), 'POST', '/forgot', { body: form({ email }) });
-  const known = await ask(F.e), unknown = await ask(`nobody-${RUN}${TEST}`);
+  const known = await ask(F.e), unknown = await ask(`nobody-${RUN}${TEST}`.toLowerCase());
   ok('the same answer is given whether or not the email exists', known.status === 200 && unknown.status === 200 && known.text === unknown.text && /If that email address has an account/.test(known.text));
   const box = async (email) => (await req(admin(), 'GET', '/admin/outbox?to=' + encodeURIComponent(email))).json();
   let mails = await box(F.e);
   ok('a reset email was produced for the real address', mails.length === 1 && /\/reset\?t=[a-f0-9]{64}/.test(mails[0].text), JSON.stringify(mails).slice(0, 120));
-  ok('and none for an unknown address', (await box(`nobody-${RUN}${TEST}`)).length === 0);
+  ok('and none for an unknown address', (await box(`nobody-${RUN}${TEST}`.toLowerCase())).length === 0);
   const link1 = (mails[0].text.match(/https:\/\/[^\s]+\/reset\?t=[a-f0-9]{64}/) || [''])[0];
   const path1 = link1.replace(/^https:\/\/[^/]+/, '');
   const tok1 = path1.split('t=')[1];
