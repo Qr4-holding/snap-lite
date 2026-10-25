@@ -254,6 +254,20 @@ async function phase4() {
   if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `crew4-${RUN}${TEST}` }) });
     crew = (await login(`crew4-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
   const J = async (who, type) => (await req(who, 'POST', '/api/jobs', { json: { job_type: type }, headers: { accept: 'application/json' } })).json().id;
+  // iPhone: a real HEIC file must come back as a JPEG
+  const heicBuf = fs.readFileSync(path.join(__dirname, 'fixtures', 'sample.heic'));
+  const hj = await J(owner, 'Garden');
+  const hu = await upload(owner, hj, 'before', 0, heicBuf, 'IMG_0001.HEIC', 'image/heic');
+  ok('a real HEIC photo is accepted', hu.status === 200 && hu.body.ok, JSON.stringify(hu.body));
+  const hp = await fetch(`${BASE}/api/jobs/${hj}/photos/before/0`, { headers: { cookie: owner.cookie } });
+  const hb = Buffer.from(await hp.arrayBuffer());
+  ok('and it is stored as a JPEG', hp.headers.get('content-type') === 'image/jpeg' && hb[0] === 0xff && hb[1] === 0xd8 && hu.body.width > 0);
+  const hu2 = await upload(owner, hj, 'after', 0, heicBuf, 'photo.jpg', 'image/jpeg');
+  ok('a HEIC file labelled as JPEG is accepted too', hu2.status === 200 && hu2.body.ok, JSON.stringify(hu2.body));
+  ok('garbage is still refused', (await upload(owner, hj, 'during', 0, Buffer.from('not a photo at all'), 'x.heic', 'image/heic')).status === 400);
+  const cap = (await req(owner, 'GET', `/jobs/${hj}/capture`)).text;
+  ok('the gallery input has no capture attribute', /<input type="file" id="gal" accept="image\/\*" hidden>/.test(cap));
+  ok('the camera button opens the native camera on iPhone before any await', /IOS\|\|!navigator\.mediaDevices/.test(cap) && /Image\(\)/.test(cap));
   const dir = process.env.PHOTO_DIR, real = n => dir && fs.existsSync(path.join(dir, n)) ? fs.readFileSync(path.join(dir, n)) : null;
   const wait = async (who, id, secs = 240) => { for (let i = 0; i < secs; i += 3) { const s = (await req(who, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') return s; await new Promise(r => setTimeout(r, 3000)); } return { state: 'timeout' }; };
   const probe = async (who, id) => {

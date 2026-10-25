@@ -78,7 +78,14 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
     // re-encode: auto-rotate, cap size, drop GPS and other hidden data
     let info;
     try {
-      const img = sharp(req.file.buffer, { failOn: 'none' }).rotate();
+      let buf = req.file.buffer;
+      // iPhone photos can arrive as HEIC, which the bundled sharp cannot decode: turn them into JPEG first
+      const isHeic = buf.length > 12 && buf.toString('latin1', 4, 8) === 'ftyp' && /^(heic|heix|hevc|hevx|heim|heis|mif1|msf1)/.test(buf.toString('latin1', 8, 12));
+      const heic = async () => Buffer.from(await require('heic-convert')({ buffer: buf, format: 'JPEG', quality: 0.92 }));
+      if (isHeic) buf = await heic();
+      let img = sharp(buf, { failOn: 'none' }).rotate();
+      try { await img.clone().resize({ width: 8, height: 8, fit: 'inside' }).raw().toBuffer(); }
+      catch (e) { if (isHeic) throw e; buf = await heic(); img = sharp(buf, { failOn: 'none' }).rotate(); }
       info = await img.clone().resize({ width: 2160, height: 2160, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toFile(path.join(dir, name + '.jpg'));
       await img.clone().resize({ width: 320, height: 320, fit: 'inside' }).jpeg({ quality: 78 }).toFile(path.join(dir, name + '_t.jpg'));
     } catch (e) { return res.status(400).json({ error: 'That file is not a photo we can read.' }); }
@@ -202,6 +209,7 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'own
 <p class="small">Take the BEFORE photo first. For AFTER, stand in the same spot: a faint outline of the before photo helps you line it up. During photos are optional. Each photo saves as you take it.</p>
 <div class="shots" id="shots">${slots}</div>
 <p id="note" class="small"></p>
+<div id="cmp" style="display:none;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px"><div><div class="small">BEFORE</div><img id="cb" alt="Before" style="width:100%;border-radius:10px"></div><div><div class="small">AFTER</div><img id="ca" alt="After" style="width:100%;border-radius:10px"></div></div>
 <div style="display:grid;gap:10px;margin-top:14px"><a class="btn" id="done" href="/jobs/${j.id}/voice" aria-disabled="true">Done: save job</a></div>
 <input type="file" id="gal" accept="image/*" hidden>
 <input type="file" id="cap" accept="image/*" capture="environment" hidden>
@@ -212,6 +220,7 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'own
 
   // browser side of the capture screen: live camera with a ghost of the BEFORE photo for AFTER, gallery import, one request per photo with retries
   const CAPTURE_JS = `(function(){
+var IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)||navigator.standalone===true;
 var CFG=__CFG__, $=function(s){return document.querySelector(s)}, slots={}, cur=null, stream=null;
 document.querySelectorAll('.shot').forEach(function(el){ slots[el.dataset.kind+el.dataset.seq]=el;
   el.querySelector('.retake').addEventListener('click',function(e){ e.stopPropagation(); open(el); });
@@ -220,7 +229,8 @@ function url(k,s){ return '/api/jobs/'+CFG.id+'/photos/'+k+'/'+s+'?t=1&v='+CFG.v
 function mark(k,s,u){ var el=slots[k+s]; if(!el) return; el.classList.add('has'); el.classList.remove('err'); el.style.backgroundImage="url('"+u+"')"; var h=el.querySelector('.hint'); if(h) h.hidden=true; }
 CFG.photos.forEach(function(p){ mark(p.kind,p.seq,url(p.kind,p.seq)); });
 function status(el,t,bad){ var st=el.querySelector('.st'); st.hidden=!t; st.textContent=t||''; el.classList.toggle('err',!!bad); }
-function note(){ var b=CFG.photos.some(function(p){return p.kind==='before'}), a=CFG.photos.some(function(p){return p.kind==='after'}); $('#note').textContent=(b&&a)?'Before and after saved. You can add during photos or finish.':(b?'Now the AFTER photo.':''); $('#done').setAttribute('aria-disabled',(b&&a)?'false':'true'); }
+function note(){ var b=CFG.photos.some(function(p){return p.kind==='before'}), a=CFG.photos.some(function(p){return p.kind==='after'}); $('#note').textContent=(b&&a)?'Before and after saved. You can add during photos or finish.':(b?'Now the AFTER photo.':''); $('#done').setAttribute('aria-disabled',(b&&a)?'false':'true'); compare(b&&a); }
+function compare(both){ var c=$('#cmp'); if(!c) return; if(!IOS||!both){ c.style.display='none'; return; } $('#cb').src='/api/jobs/'+CFG.id+'/photos/before/0?v='+CFG.version; $('#ca').src='/api/jobs/'+CFG.id+'/photos/after/0?v='+CFG.version; c.style.display='grid'; }
 $('#done').addEventListener('click',function(e){ if($('#done').getAttribute('aria-disabled')==='true'){ e.preventDefault(); $('#note').textContent='Add at least a BEFORE and an AFTER photo first.'; } });
 function remove(el){
   var k=el.dataset.kind, s=+el.dataset.seq; status(el,'Removing…');
@@ -236,10 +246,12 @@ $('#mX').onclick=function(){ $('#menu').hidden=true; };
 $('#mGal').onclick=function(){ $('#menu').hidden=true; $('#gal').value=''; $('#gal').click(); };
 $('#gal').onchange=function(){ if(this.files[0]) send(cur,this.files[0]); };
 $('#cap').onchange=function(){ if(this.files[0]) send(cur,this.files[0]); };
+function native(){ $('#cap').value=''; $('#cap').click(); }
 $('#mCam').onclick=async function(){
   $('#menu').hidden=true; var el=cur;
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ $('#cap').value=''; $('#cap').click(); return; }
-  try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:2160},height:{ideal:2160}},audio:false}); }catch(e){ $('#cap').value=''; $('#cap').click(); return; }
+  // iPhone: open the native camera straight from the tap (iOS blocks it after any await); no live camera, no ghost
+  if(IOS||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ native(); return; }
+  try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:2160},height:{ideal:2160}},audio:false}); }catch(e){ native(); return; }
   var v=$('#vid'); v.srcObject=stream; await v.play().catch(function(){});
   var g=$('#ghost'); if(el.dataset.kind==='after'&&slots.before0.classList.contains('has')){ g.src='/api/jobs/'+CFG.id+'/photos/before/0?v='+CFG.version; g.hidden=false; } else g.hidden=true;
   $('#cam').hidden=false;
@@ -247,7 +259,13 @@ $('#mCam').onclick=async function(){
 function stop(){ if(stream){ stream.getTracks().forEach(function(t){t.stop();}); stream=null; } $('#cam').hidden=true; }
 $('#cX').onclick=stop;
 $('#snap').onclick=function(){ var v=$('#vid'); if(!v.videoWidth) return; var c=document.createElement('canvas'); var s=Math.min(1,2160/Math.max(v.videoWidth,v.videoHeight)); c.width=Math.round(v.videoWidth*s); c.height=Math.round(v.videoHeight*s); c.getContext('2d').drawImage(v,0,0,c.width,c.height); var el=cur; stop(); c.toBlob(function(b){ send(el,b); },'image/jpeg',0.92); };
-async function shrink(f){ try{ var bmp=await createImageBitmap(f,{imageOrientation:'from-image'}); var s=Math.min(1,2160/Math.max(bmp.width,bmp.height)); if(s>=1&&f.size<6e6) return f; var c=document.createElement('canvas'); c.width=Math.round(bmp.width*s); c.height=Math.round(bmp.height*s); c.getContext('2d').drawImage(bmp,0,0,c.width,c.height); return await new Promise(function(r){ c.toBlob(function(b){ r(b||f); },'image/jpeg',0.9); }); }catch(e){ return f; } }
+function toJpeg(src,w,h,f){ var sc=Math.min(1,2160/Math.max(w,h)); if(sc>=1&&f.size<6e6&&f.type==='image/jpeg') return Promise.resolve(f); var c=document.createElement('canvas'); c.width=Math.round(w*sc); c.height=Math.round(h*sc); c.getContext('2d').drawImage(src,0,0,c.width,c.height); return new Promise(function(r){ c.toBlob(function(b){ r(b||f); },'image/jpeg',0.9); }); }
+function viaImg(f){ return new Promise(function(res,rej){ var u=URL.createObjectURL(f), im=new Image(); im.onload=function(){ toJpeg(im,im.naturalWidth,im.naturalHeight,f).then(function(b){ URL.revokeObjectURL(u); res(b); }); }; im.onerror=function(){ URL.revokeObjectURL(u); rej(new Error('img')); }; im.src=u; }); }
+async function shrink(f){
+  try{ var bmp=await createImageBitmap(f,{imageOrientation:'from-image'}); return await toJpeg(bmp,bmp.width,bmp.height,f); }catch(e){}
+  try{ return await viaImg(f); }catch(e){}
+  return f;   // the server converts HEIC and anything else it can read
+}
 async function send(el,file){
   var k=el.dataset.kind, s=+el.dataset.seq; status(el,'Uploading…');
   var blob=await shrink(file);
