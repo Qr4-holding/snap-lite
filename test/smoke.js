@@ -586,6 +586,33 @@ async function phaseDiag() {
   ok('the capture screen sends a report when an upload cannot be saved', /beacon\(\{stage:'upload-failed'/.test((await req(owner, 'GET', `/jobs/${jid}/capture`)).text));
 }
 
+async function phaseHelp() {
+  console.log('\n== Help page ==');
+  if (!ADMIN_PW) { ok('ADMIN_PASSWORD supplied', false, 'set ADMIN_PASSWORD'); return; }
+  const e = `help-${RUN}${TEST}`.toLowerCase(), pw = 'Owner-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'T', email: e, password: pw }) });
+  const owner = (await login(e, pw)).p;
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'help', 'help.json'), 'utf8'));
+  const pub = manifest.filter(m => m.public), priv = manifest.filter(m => !m.public);
+  ok('the help list has one public video and more for signed-in people', pub.length >= 1 && priv.length >= 1);
+  const out = await req(person(), 'GET', '/help');
+  ok('/help opens signed out', out.status === 200 && /How does this work\?/.test(out.text));
+  ok('signed out shows the public video titles only', pub.every(m => out.text.includes(m.title)) && priv.every(m => !out.text.includes(m.title)));
+  ok('signed out offers to sign in for the rest', /Sign in to see the rest/.test(out.text));
+  const inn = await req(owner, 'GET', '/help');
+  ok('signed in shows every video title', manifest.every(m => inn.text.includes(m.title)) && !/Sign in to see the rest/.test(inn.text));
+  ok('videos that are not there yet show Video coming soon, and the others a portrait player', /Video coming soon/.test(inn.text) || /<video controls playsinline/.test(inn.text));
+  ok('the player is portrait and does not autoplay', !/<video[^>]*autoplay/.test(inn.text) && (!/<video/.test(inn.text) || /aspect-ratio:9\/16/.test(inn.text)));
+  ok('the sign-in screen links to it', /href="\/help">How does this work\?/.test((await req(person(), 'GET', '/login')).text));
+  ok('Settings has a Help entry', /href="\/help"/.test((await req(owner, 'GET', '/settings')).text));
+  for (const m of manifest) {
+    const v = await req(person(), 'GET', `/help/v/${m.id}.mp4`), vi = await req(owner, 'GET', `/help/v/${m.id}.mp4`);
+    if (m.public) ok(`public video ${m.id}: ${vi.status === 200 ? 'playable signed out' : 'not added yet (404)'}`, vi.status === 200 ? v.status === 200 : (vi.status === 404 && v.status === 404));
+    else ok(`private video ${m.id} is never served signed out`, v.status === 401 || v.status === 404);
+  }
+  ok('an unknown video id is a 404', (await req(owner, 'GET', '/help/v/nope.mp4')).status === 404 && (await req(owner, 'GET', '/help/p/..%2fserver.mp4.jpg')).status === 404);
+}
+
 async function engine() {
   console.log('\n== Engine timing (local, no server) ==');
   const r = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'engine_timing.py')], { encoding: 'utf8' });
@@ -609,6 +636,7 @@ async function engine() {
     if (['phase6', 'all'].includes(which)) await phase6();
     if (['reset', 'all'].includes(which)) await phaseReset();
     if (['diag', 'all'].includes(which)) await phaseDiag();
+    if (['help', 'all'].includes(which)) await phaseHelp();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
