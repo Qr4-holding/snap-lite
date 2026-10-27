@@ -72,6 +72,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     res.status(big ? 413 : 400).json({ error: (big ? 'That photo is too large (25 MB max).' : 'Could not read that upload.') + ` (code ${code})`, code });
   });
   app.post('/api/jobs/:id/photos', sameOrigin, needUser({ json: true }), capOk, uploadSafe, async (req, res, next) => { try {
+    req.body = req.body || {};
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: 'Job not found.' });
     if (!canEdit(req.user, j)) return res.status(409).json({ error: 'This job can no longer be changed.' });

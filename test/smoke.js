@@ -541,6 +541,7 @@ async function phaseReset() {
 
 async function phaseDiag() {
   console.log('\n== Diagnostics (/check) ==');
+  const fs = require('fs'), path = require('path');
   if (!ADMIN_PW) { ok('ADMIN_PASSWORD supplied', false, 'set ADMIN_PASSWORD'); return; }
   const e = `diag-${RUN}${TEST}`.toLowerCase(), pw = 'Owner-pass-' + RUN;
   await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'T', email: e, password: pw }) });
