@@ -108,6 +108,9 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
   });
 
   app.post('/admin/keys', auth, sameOrigin, form, async (req, res, next) => { try {
+    const wrong = (req.body.elevenlabs_key || '').trim() && !/^sk_/.test(String(req.body.elevenlabs_key).trim()) ? "That is not the ElevenLabs key itself (real keys start with sk_). It may be the key's ID. Nothing was saved: copy the key when it is created, or create a new one."
+      : (req.body.anthropic_key || '').trim() && !/^sk-ant-/.test(String(req.body.anthropic_key).trim()) ? 'That does not look like an Anthropic key (they start with sk-ant-). Nothing was saved.' : '';
+    if (wrong) return res.redirect(303, '/admin?m=bad&why=' + encodeURIComponent(wrong));
     for (const k of ['elevenlabs_key', 'anthropic_key', 'brevo_login', 'brevo_key', 'mail_from']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
     res.redirect(303, req.body.back ? '/settings?m=keys' : '/admin?m=keys');
   } catch (e) { next(e); } });

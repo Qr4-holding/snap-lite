@@ -82,6 +82,8 @@ async function phaseAdminBack() {
   ok('the Keys form has Save keys and go back', /name="back" value="1">Save keys and go back/.test(ad));
   const r = await req(admin(), 'POST', '/admin/keys', { body: form({ back: '1' }) });
   ok('Save keys and go back returns to Settings', r.status === 303 && /^(https?:\/\/[^/]+)?\/settings\?m=keys$/.test(r.loc), r.status + ' ' + r.loc);
+  const idKey = await req(admin(), 'POST', '/admin/keys', { body: form({ elevenlabs_key: 'a'.repeat(40) }) });
+  ok('a key that does not start sk_ is refused with a plain reason', idKey.status === 303 && /m=bad/.test(idKey.loc) && /sk_/.test(decodeURIComponent(idKey.loc)), idKey.loc);
   const r2 = await req(admin(), 'POST', '/admin/keys', { body: form({}) });
   ok('plain Save keys stays on the admin page', r2.status === 303 && /\/admin\?m=keys$/.test(r2.loc), r2.loc);
 }
