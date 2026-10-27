@@ -23,11 +23,13 @@ module.exports = function voice({ app, pool, SKIN, ui, acct, jobsMod, getRender,
   // ---------- ElevenLabs ----------
   async function generate(text, voiceId, model) {
     const key = await secrets.get('elevenlabs_key');
-    if (!key) throw new Error('No ElevenLabs key is set on the server yet.');
-    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps?output_format=mp3_44100_128`, {
+    if (!key) { const e = new Error('No ElevenLabs key is set'); e.tag = 'voice_off'; throw e; }
+    let r;
+    try { r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps?output_format=mp3_44100_128`, {
       method: 'POST', headers: { 'xi-api-key': key, 'content-type': 'application/json' },
-      body: JSON.stringify({ text, model_id: model }), signal: AbortSignal.timeout(90000) });
-    if (!r.ok) { let d = ''; try { d = (await r.json()).detail; d = typeof d === 'string' ? d : (d.message || d.status || ''); } catch (e) {} const err = new Error(`Voice service said ${r.status}${d ? ': ' + String(d).slice(0, 140) : ''}`); err.status = r.status; throw err; }
+      body: JSON.stringify({ text, model_id: model }), signal: AbortSignal.timeout(90000) }); }
+    catch (e) { e.tag = 'voice_busy'; throw e; }
+    if (!r.ok) { let d = ''; try { d = (await r.json()).detail; d = typeof d === 'string' ? d : (d.message || d.status || ''); } catch (e) {} const err = new Error(`Voice service said ${r.status}${d ? ': ' + String(d).slice(0, 140) : ''}`); err.status = r.status; err.tag = (r.status === 401 || r.status === 403 || r.status === 402) ? 'voice_rejected' : (r.status === 429 || r.status >= 500) ? 'voice_busy' : 'voice_rejected'; throw err; }
     return r.json();
   }
   // Characters with times in, per-line spans and words out.
@@ -119,13 +121,13 @@ document.getElementById('redo').addEventListener('click',function(){var b=this;b
   // JSON versions (also what the tests use)
   app.post('/api/jobs/:id/lines/draft', sameOrigin, needUser({ json: true }), express.json({ limit: '2kb' }), async (req, res, next) => { try {
     const j = await jobsMod.getJob(req.user, req.params.id);
-    if (!open(req.user, j || {}) || !j) return res.status(404).json({ error: 'Job not found.' });
+    if (!open(req.user, j || {}) || !j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
     const d = await linesMod.draft(j.job_type); await saveJob(j.id, d.lines.join('\n\n'), j.voice_id); events('lines_drafted', req.user.id, j.id, d.source);
     res.set('Cache-Control', 'no-store').json({ lines: d.lines, source: d.source });
   } catch (e) { next(e); } });
   app.post('/api/jobs/:id/lines', sameOrigin, needUser({ json: true }), express.json({ limit: '4kb' }), async (req, res, next) => { try {
     const j = await jobsMod.getJob(req.user, req.params.id);
-    if (!j || !open(req.user, j)) return res.status(404).json({ error: 'Job not found.' });
+    if (!j || !open(req.user, j)) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
     const b = req.body || {}; const v = String(b.voice || ''); const voiceId = v === 'none' || voices.some(x => x.id === v) ? v : (j.voice_id || 'none');
     const s = linesMod.sanitize(Array.isArray(b.lines) ? b.lines : []);
     const fb = linesMod.templateLines(j.job_type); const final = s.lines.map((l, i) => l || fb[i]);

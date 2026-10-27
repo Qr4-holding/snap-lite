@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const errs = require('./lib/errors');
 const express = require('express');
 const multer = require('multer');
 const photo = require('./lib/photo');
@@ -25,7 +26,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   // some clients (EKP11) want only the owner to take photos: skin flag crew_can_capture=false
   const capOk = (req, res, next) => {
     if (SKIN.crew_can_capture || (req.user && req.user.role === 'owner')) return next();
-    return req.path.startsWith('/api/') ? res.status(403).json({ error: 'Only the owner can take photos on this account.' }) : res.redirect(303, '/');
+    return req.path.startsWith('/api/') ? res.status(403).json({ error: 'Only the owner can take photos on this app. Ask the owner.' }) : res.redirect(303, '/');
   };
 
   async function init() {
@@ -69,18 +70,18 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   const uploadSafe = (req, res, next) => upload.single('file')(req, res, async e => {
     if (!e) return next();
     const big = e.code === 'LIMIT_FILE_SIZE', code = await diag.uploadFailure(req, { reason: 'upload rejected: ' + (e.code || e.message), error: e, status: big ? 413 : 400, jobId: parseInt(req.params.id, 10) || null });
-    res.status(big ? 413 : 400).json({ error: (big ? 'That photo is too large (25 MB max).' : 'Could not read that upload.') + ` (code ${code})`, code });
+    res.status(big ? 413 : 400).json({ error: (big ? 'That photo is too large (25 MB at most). Take it again or pick a smaller one.' : "That photo didn't arrive properly. Tap it to try again.") + ` (code ${code})`, code });
   });
   app.post('/api/jobs/:id/photos', sameOrigin, needUser({ json: true }), capOk, uploadSafe, async (req, res, next) => { try {
     req.body = req.body || {};
     const j = await getJob(req.user, req.params.id);
-    if (!j) return res.status(404).json({ error: 'Job not found.' });
-    if (!canEdit(req.user, j)) return res.status(409).json({ error: 'This job can no longer be changed.' });
+    if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
+    if (!canEdit(req.user, j)) return res.status(409).json({ error: 'This job has already been made into a video, so its photos can no longer be changed.' });
     const kind = ['before', 'during', 'after'].includes(req.body.kind) ? req.body.kind : '';
     const seq = kind === 'during' ? parseInt(req.body.seq, 10) : 0;
     if (!kind || !req.file || !(seq >= 0) || (kind === 'during' && seq >= SKIN.max_during) || (kind !== 'during' && seq !== 0)) {
       const code = await diag.uploadFailure(req, { reason: 'bad request: ' + (!req.file ? 'no file in the request' : 'kind/seq not valid'), status: 400, file: req.file, jobId: j.id });
-      return res.status(400).json({ error: `Check the photo type and try again. (code ${code})`, code });
+      return res.status(400).json({ error: `That file doesn't look like a photo. Pick a picture from your gallery or use the camera. (code ${code})`, code });
     }
     const dir = dirOf(j.id); fs.mkdirSync(dir, { recursive: true });
     const name = `${kind}${seq}`;
@@ -92,7 +93,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
       info = { width: r.width, height: r.height };
     } catch (e) {
       const code = await diag.uploadFailure(req, { reason: 'decode failed', error: e, status: 400, file: req.file, jobId: j.id });
-      return res.status(400).json({ error: `That file is not a photo we can read. (code ${code})`, code });
+      return res.status(400).json({ error: `We couldn't read that photo. Try taking it again with the camera. (code ${code})`, code });
     }
     await pool.query(`INSERT INTO job_photos (job_id,kind,seq,file,width,height) VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (job_id,kind,seq) DO UPDATE SET file=EXCLUDED.file, width=EXCLUDED.width, height=EXCLUDED.height, taken_at=now()`, [j.id, kind, seq, name + '.jpg', info.width, info.height]);
@@ -112,7 +113,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   // remove one photo from a draft (the capture screen's Remove button)
   app.delete('/api/jobs/:id/photos/:kind/:seq', sameOrigin, needUser({ json: true }), capOk, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
-    if (!j || !canEdit(req.user, j)) return res.status(404).json({ error: 'Job not found.' });
+    if (!j || !canEdit(req.user, j)) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
     const { kind, seq } = req.params;
     if (!['before', 'during', 'after'].includes(kind) || !/^\d$/.test(seq)) return res.status(404).json({ error: 'Photo not found.' });
     await pool.query('DELETE FROM job_photos WHERE job_id=$1 AND kind=$2 AND seq=$3', [j.id, kind, +seq]);
@@ -123,8 +124,8 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
 
   app.get('/api/jobs/:id/status', needUser({ json: true }), async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
-    if (!j) return res.status(404).json({ error: 'Job not found.' });
-    res.set('Cache-Control', 'no-store').json({ id: j.id, state: j.state, orientation: j.orientation, job_type: j.job_type, error: j.render_error, photos: await photosOf(j.id) });
+    if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
+    res.set('Cache-Control', 'no-store').json({ id: j.id, state: j.state, orientation: j.orientation, job_type: j.job_type, error: j.render_error ? errs.plain(j.render_error, req.user.role, SKIN.name) : null, photos: await photosOf(j.id) });
   } catch (e) { next(e); } });
 
   app.get('/api/jobs', needUser({ json: true }), async (req, res, next) => { try {
@@ -141,16 +142,16 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   // ---------- owner-only actions, enforced here whatever the screens show ----------
   app.post('/api/jobs/:id/approve', sameOrigin, needUser({ json: true }), needOwner, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
-    if (!j) return res.status(404).json({ error: 'Job not found.' });
-    if (j.state !== 'ready') return res.status(409).json({ error: 'Only a finished video can be approved.' });
+    if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
+    if (j.state !== 'ready') return res.status(409).json({ error: 'The video is not finished yet. Wait until it is ready, then approve it.' });
     await pool.query("UPDATE jobs SET state='approved' WHERE id=$1", [j.id]); events('approved', req.user.id, j.id);
     res.json({ ok: true, state: 'approved' });
   } catch (e) { next(e); } });
 
   app.post('/api/jobs/:id/shared', sameOrigin, needUser({ json: true }), needOwner, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
-    if (!j) return res.status(404).json({ error: 'Job not found.' });
-    if (!['approved', 'shared'].includes(j.state)) return res.status(409).json({ error: 'Approve the video first.' });
+    if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
+    if (!['approved', 'shared'].includes(j.state)) return res.status(409).json({ error: 'Approve the video first, then share it.' });
     await pool.query("UPDATE jobs SET state='shared', shared_at=now(), share_count=share_count+1 WHERE id=$1", [j.id]); events('shared', req.user.id, j.id);
     res.json({ ok: true, state: 'shared' });
   } catch (e) { next(e); } });
@@ -304,13 +305,14 @@ note();
     const done = ['ready', 'approved', 'shared'].includes(j.state);
     const v = encodeURIComponent(j.dur || '') + (j.shared_at ? '' : '');
     const player = done ? `<video id="vid" controls playsinline preload="metadata" poster="/api/jobs/${j.id}/cover" src="/api/jobs/${j.id}/video" style="display:block;margin:0 auto;max-width:100%;width:auto;height:34vh;border-radius:14px;background:#000"></video><button type="button" class="sec small" id="fs" style="margin:6px auto 0">Full screen</button>` : '';
+    const notStarted = req.query.m === 'err' ? '<p class="msg bad" role="alert">The video could not be started. Check there is a BEFORE and an AFTER photo, then try again.</p>' : '';
     const busy = j.state === 'rendering' ? '<p class="msg" id="busy">Making your video… this takes about a minute. You can leave this page open.</p>' : '';
-    const fail = j.state === 'failed' ? `<p class="msg bad">The video could not be made${j.render_error ? ': ' + esc(j.render_error) : ''}. Try again.</p>` : '';
+    const fail = j.state === 'failed' ? `<p class="msg bad" role="alert">${errs.renderFailure(j.render_error, u.role, SKIN.name)}</p>` : '';
     const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
     const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
     res.set('Cache-Control', 'no-store').send(page('Job', `
 <h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>
-${busy}${fail}${player}
+${notStarted}${busy}${fail}${player}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve" style="margin-top:10px"><button type="submit">Approve</button></form>` : ''}
 ${sh ? sh.html : ''}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}

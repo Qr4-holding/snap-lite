@@ -15,7 +15,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   async function buildConfig(j) {
     const dir = jobsMod.dirOf(j.id);
     const ph = (await pool.query('SELECT kind,seq FROM job_photos WHERE job_id=$1 ORDER BY CASE kind WHEN \'before\' THEN 0 WHEN \'during\' THEN 1 ELSE 2 END, seq', [j.id])).rows;
-    if (!ph.some(p => p.kind === 'before') || !ph.some(p => p.kind === 'after')) throw new Error('Needs a BEFORE and an AFTER photo.');
+    if (!ph.some(p => p.kind === 'before') || !ph.some(p => p.kind === 'after')) { const e = new Error('Needs a BEFORE and an AFTER photo.'); e.tag = 'photos'; throw e; }
     const cfg = {
       out: path.join(dir, 'video.tmp.mp4'), cover: path.join(dir, 'cover.tmp.jpg'), work: path.join(dir, 'work'),
       orientation: j.orientation || 'auto',
@@ -54,7 +54,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
       await pool.query("UPDATE jobs SET state='ready', video='video.mp4', cover='cover.jpg', dur=$2, render_error=NULL WHERE id=$1 AND state='rendering'", [id, String(res.duration)]);
       events('rendered', null, id, `${res.duration}s in ${Math.round((Date.now() - t0) / 1000)}s`);
     } catch (e) {
-      await pool.query("UPDATE jobs SET state='failed', render_error=$2 WHERE id=$1 AND state='rendering'", [id, String(e.message).slice(0, 300)]).catch(() => {});
+      await pool.query("UPDATE jobs SET state='failed', render_error=$2 WHERE id=$1 AND state='rendering'", [id, e.tag || 'other']).catch(() => {});
       events('render_failed', null, id, e.message);
     } finally { fs.rm(path.join(dir, 'work'), { recursive: true, force: true }, () => {}); }
   }
@@ -68,8 +68,8 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
 
   async function start(user, id) {
     const j = await jobsMod.getJob(user, id);
-    if (!j) return { code: 404, error: 'Job not found.' };
-    if (!canRender(user, j)) return { code: 409, error: 'This video cannot be remade now.' };
+    if (!j) return { code: 404, error: "We can't find that job. Go back to Jobs and try again." };
+    if (!canRender(user, j)) return { code: 409, error: 'This video is being made or is already approved, so it cannot be remade now.' };
     const ph = (await pool.query('SELECT kind FROM job_photos WHERE job_id=$1', [j.id])).rows.map(p => p.kind);
     if (!ph.includes('before') || !ph.includes('after')) return { code: 400, error: 'Add a BEFORE and an AFTER photo first.' };
     await pool.query("UPDATE jobs SET state='rendering', render_error=NULL WHERE id=$1", [j.id]);
@@ -95,7 +95,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   app.get('/api/jobs/:id/video', needUser({ json: true }), sendMedia('video.mp4', 'video/mp4'));
   app.get('/api/jobs/:id/timing', needUser({ json: true }), async (req, res, next) => { try {
     const j = await jobsMod.getJob(req.user, req.params.id);
-    if (!j) return res.status(404).json({ error: 'Job not found.' });
+    if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
     let t = {}; try { t = JSON.parse(fs.readFileSync(path.join(jobsMod.dirOf(j.id), 'timing.json'), 'utf8')); } catch (e) {}
     if (Array.isArray(t)) t = { timing: t };
     res.set('Cache-Control', 'no-store').json({ timing: t.timing || [], stills: t.stills || 0, padding: t.padding || [] });

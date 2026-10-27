@@ -52,7 +52,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const needUser = (opts = {}) => async (req, res, next) => {
     try {
       const u = await current(req);
-      if (!u) return opts.json || req.path.startsWith('/api/') ? res.status(401).json({ error: 'Please sign in.' }) : res.redirect(302, '/login');
+      if (!u) return opts.json || req.path.startsWith('/api/') ? res.status(401).json({ error: 'Your sign-in has run out. Please sign in again.' }) : res.redirect(302, '/login');
       if (u.must_change) return opts.json || req.path.startsWith('/api/') ? res.status(403).json({ error: 'Please choose a new password first.', must_change: true }) : res.redirect(302, '/change-password');
       req.user = u; next();
     } catch (e) { next(e); }
@@ -60,8 +60,8 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const needOwner = async (req, res, next) => {
     try {
       const u = req.user || await current(req);
-      if (!u) return req.path.startsWith('/api/') ? res.status(401).json({ error: 'Please sign in.' }) : res.redirect(302, '/login');
-      if (u.role !== 'owner') return req.path.startsWith('/api/') ? res.status(403).json({ error: 'Only the owner can do that.' }) : res.status(403).send(page('Owner only', `<h1>Owner only</h1><p>Only the owner can do that.</p><a class="btn" href="/">Back</a>`, { user: u }));
+      if (!u) return req.path.startsWith('/api/') ? res.status(401).json({ error: 'Your sign-in has run out. Please sign in again.' }) : res.redirect(302, '/login');
+      if (u.role !== 'owner') return req.path.startsWith('/api/') ? res.status(403).json({ error: 'Only the owner can do that. Ask the owner.' }) : res.status(403).send(page('Owner only', `<h1>Owner only</h1><p>Only the owner can do that.</p><a class="btn" href="/">Back</a>`, { user: u }));
       req.user = u; next();
     } catch (e) { next(e); }
   };
@@ -145,6 +145,7 @@ ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c
 ${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div class="jobs">${people.map(c => `<div class="card"><b>${esc(c.email)}</b> <span class="small">(${c.role})</span><form method="post" action="/settings/users/${c.id}/reset" onsubmit="return confirm('Reset this password? They will be signed out.')"><button class="sec small" type="submit">Reset password</button></form></div>`).join('')}</div>` : ''}
 <h2>Change password</h2>
 <form class="card" method="post" action="/settings/password"><label class="f">Current password<input name="current" type="password" required autocomplete="current-password"></label><label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>
+${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are switched on here. Sign in with the admin login.</p><p><a class="btn sec" href="/admin">Voice and writing keys</a></p>` : ''}
 <h2>Help</h2><p><a class="btn sec" href="/help">How does this work? (short videos)</a></p>
 <h2>App</h2><p class="small">Version <span id="v">${esc(process.env.APP_VERSION || 'dev')}</span></p>
 <form method="post" action="/logout"><button class="sec" type="submit">Sign out</button></form>

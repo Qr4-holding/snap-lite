@@ -24,8 +24,8 @@ module.exports = function share({ app, pool, SKIN, ui, acct, jobsMod, events }) 
   // owner asks for the link to hand out
   app.post('/api/jobs/:id/link', sameOrigin, needUser({ json: true }), needOwner, async (req, res, next) => { try {
     const j = await jobsMod.getJob(req.user, req.params.id);
-    if (!j) return res.status(404).json({ error: 'Job not found.' });
-    if (!shareable(j)) return res.status(409).json({ error: 'Approve the video first.' });
+    if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
+    if (!shareable(j)) return res.status(409).json({ error: 'Approve the video first, then share it.' });
     events('link_made', req.user.id, j.id);
     res.set('Cache-Control', 'no-store').json({ url: `${origin(req)}/job/${j.slug}?${makeQuery(j.slug)}` });
   } catch (e) { next(e); } });

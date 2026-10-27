@@ -71,6 +71,20 @@ async function phase1() {
   ok('security headers present', h.headers.get('x-content-type-options') === 'nosniff' && /noindex/.test(h.headers.get('x-robots-tag') || ''));
 }
 
+async function phaseErrors() {
+  console.log('\n== Plain-words errors ==');
+  const E = require('../lib/errors'), BAD = /server|key\b|api|elevenlabs|status|\b[45]\d\d\b|undefined|\[object/i;
+  const crew = E.plain('voice_off', 'crew', 'EKP11 Waste Management'), own = E.renderFailure('voice_off', 'owner', 'EKP11 Waste Management');
+  ok('crew voice-off says it plainly and who to ask', /^Voice isn't switched on for this app yet\. Ask EKP11 Waste Management\./.test(crew), crew);
+  ok('crew voice-off never mentions keys, servers or ElevenLabs', !BAD.test(crew), crew);
+  ok('owner voice-off says where to set it up and links Settings', /Set it up under .*Settings → Keys/.test(own) && /href="\/settings"/.test(own), own);
+  for (const t of E.TAGS.concat(['some raw text from an old failure'])) for (const role of ['crew', 'owner']) {
+    const m = E.plain(t, role, 'EKP11 Waste Management');
+    ok(`failure "${t}" (${role}) says what to do next and has no jargon`, /(Tap|Ask|Wait|choose|tell|Check|Set it up)/i.test(m) && (role === 'owner' || !BAD.test(m)), m);
+  }
+  const OLD = require('fs').readFileSync(require('path').join(__dirname, '..', 'voice.js'), 'utf8');
+  ok('the raw key message is never what a person is shown', !/No ElevenLabs key is set on the server/.test(OLD));
+}
 async function phaseQr() {
   const g = await fetch(BASE + '/get'); const t = await g.text();
   ok('the install page shows a QR code and the download button', g.status === 200 && /<svg[^>]*aria-label="QR code/.test(t) && /Download the app/.test(t) && /Get the EKP11 Snap app/.test(t));
@@ -649,6 +663,7 @@ async function engine() {
     if (['reset', 'all'].includes(which)) await phaseReset();
     if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['help', 'all'].includes(which)) await phaseHelp();
+    if (['errors', 'all'].includes(which)) await phaseErrors();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
