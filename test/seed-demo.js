@@ -6,7 +6,7 @@ const A = 'Basic ' + Buffer.from('admin:' + AP).toString('base64'), H = { 'conte
 const form = o => new URLSearchParams(o).toString();
 let cookie = '';
 async function api(method, p, { body, json, auth } = {}) {
-  const h = {}; if (cookie) h.cookie = cookie; if (auth) h.authorization = A;
+  const h = { accept: 'application/json' }; if (cookie) h.cookie = cookie; if (auth) h.authorization = A;
   if (json) { h['content-type'] = 'application/json'; body = JSON.stringify(json); } else if (typeof body === 'string') h['content-type'] = 'application/x-www-form-urlencoded';
   const r = await fetch(BASE + p, { method, headers: h, body, redirect: 'manual' });
   const sc = r.headers.getSetCookie ? r.headers.getSetCookie() : []; const m = sc.map(c => c.split(';')[0]).find(c => c.startsWith('sl=')); if (m) cookie = m;
@@ -26,8 +26,10 @@ async function upload(id, kind, seq, buf) {
   const r = await fetch(`${BASE}/api/jobs/${id}/photos`, { method: 'POST', body: fd, headers: { cookie } });
   if (r.status !== 200) throw new Error('upload ' + kind + ' ' + r.status + ' ' + (await r.text()));
 }
+let bot, botPw;
+async function removeBot() { if (!bot || !cookie) return; const r = await api('POST', '/settings/delete-account', { body: form({ password: botPw }) }); console.log('seed owner removed:', /m=gone/.test(r.loc)); cookie = ''; bot = null; }
 (async () => {
-  const bot = `seed-${Date.now()}@seed.invalid`, botPw = 'Seed-' + Math.random().toString(36).slice(2) + 'A1';
+  bot = `seed-${Date.now()}@seed.invalid`, botPw = 'Seed-' + Math.random().toString(36).slice(2) + 'A1';
   let r = await api('POST', '/admin/owner', { auth: true, body: form({ name: 'Seed', email: bot, password: botPw }) }); if (!/m=owner/.test(r.loc)) throw new Error('create seed owner: ' + r.loc);
   r = await api('POST', '/login', { body: form({ email: bot, password: botPw }) }); if (r.status !== 303) throw new Error('seed login ' + r.status);
   const defs = [
@@ -47,10 +49,9 @@ async function upload(id, kind, seq, buf) {
     console.log('job', id, d.type, d.approve ? 'approved' : 'ready');
   }
   // the seed owner goes away (soft delete keeps the jobs with the business)
-  r = await api('POST', '/settings/delete-account', { body: form({ password: botPw }) }); if (!/m=gone/.test(r.loc)) throw new Error('seed owner removal ' + r.loc);
-  cookie = '';
+  await removeBot();
   if (process.env.OWNER_EMAIL) {
     r = await api('POST', '/admin/owner', { auth: true, body: form({ name: process.env.OWNER_NAME || '', email: process.env.OWNER_EMAIL, password: process.env.OWNER_PW, must_change: '1' }) });
     console.log('owner created:', /m=owner/.test(r.loc));
   }
-})().catch(e => { console.error('SEED FAILED:', e.message); process.exit(1); });
+})().catch(async e => { console.error('SEED FAILED:', e.message); try { await removeBot(); } catch (x) {} process.exit(1); });
