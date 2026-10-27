@@ -17,10 +17,24 @@
     "hold_seconds": 5
   },
   "voices": [
-    { "id": "IosqM5LMIzqPfT0efhhy", "label": "Kerry" },
-    { "id": "T9bEpk4Va2Kpk1mZWay7", "label": "Darren (warm Northern male)" }
+    {
+      "id": "IosqM5LMIzqPfT0efhhy",
+      "label": "Kerry"
+    },
+    {
+      "id": "T9bEpk4Va2Kpk1mZWay7",
+      "label": "Darren (warm Northern male)"
+    }
   ],
-  "job_types": ["House clearance", "Garden", "Garage", "Builders' waste", "Cardboard and packaging", "Commercial yard", "Other"],
+  "job_types": [
+    "House clearance",
+    "Garden",
+    "Garage",
+    "Builders' waste",
+    "Cardboard and packaging",
+    "Commercial yard",
+    "Other"
+  ],
   "max_during": 3,
   "crew_enabled": true,
   "crew_can_capture": true,
@@ -31,5 +45,8 @@
     "Never use: best, cheapest, guaranteed, vetted, certified, number one, award.",
     "No town or street names. Do not claim anything outside facts_allowed."
   ],
-  "facts_allowed": []
+  "facts_allowed": [],
+  "join_text": "Want this for your business?",
+  "join_button": "Find out more",
+  "join_url": "https://cleanupsnap.co.uk"
 }

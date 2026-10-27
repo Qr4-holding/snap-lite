@@ -90,6 +90,17 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   }
 
   // ---------- sign in ----------
+  // the "no account yet?" spot: a way to ask. A skin can set join_url (with join_text/join_button) for a web link; otherwise the business phone gives WhatsApp and call buttons.
+  function joinBlock() {
+    if (SKIN.join_url) return `<div class="card" style="margin-top:18px"><p style="margin:0 0 10px"><b>${esc(SKIN.join_text || 'Want this for your business?')}</b></p><a class="btn sec" href="${esc(SKIN.join_url)}" target="_blank" rel="noopener">${esc(SKIN.join_button || 'Find out more')}</a></div>`;
+    const digits = String(SKIN.whatsapp || SKIN.phone || '').replace(/\D/g, '');
+    if (digits.length < 9) return `<p class="small">No account yet? Accounts are set up for you. Ask ${esc(SKIN.name)} to add you.</p>`;
+    const intl = digits.startsWith('44') ? digits : digits.startsWith('0') ? '44' + digits.slice(1) : digits;
+    const text = encodeURIComponent(`Hi, please add me to the ${SKIN.app_name || SKIN.name} app. My name is `);
+    return `<div class="card" style="margin-top:18px"><p style="margin:0 0 10px"><b>No account yet?</b> Ask ${esc(SKIN.name)} to add you.</p>
+<a class="btn" href="https://wa.me/${intl}?text=${text}" target="_blank" rel="noopener">Message us on WhatsApp</a>
+<p class="small" style="margin:10px 0 0">Or call <a href="tel:+${intl}">${esc(SKIN.phone || ('+' + intl))}</a></p></div>`;
+  }
   const signInPage = (m = '', email = '') => page('Sign in', `
 <h1>Sign in</h1>
 ${msg(m, true)}
@@ -99,7 +110,7 @@ ${msg(m, true)}
 <button type="submit">Sign in</button>
 </form>
 <p><a href="/forgot">Forgot password?</a> &nbsp;·&nbsp; <a href="/help">How does this work?</a></p>
-<p class="small">No account yet? Accounts are set up for you. Ask ${esc(SKIN.name)} to add you.</p>`);
+${joinBlock()}`);
 
   app.get('/login', async (req, res, next) => { try {
     if (await current(req)) return res.redirect(302, '/');

@@ -74,6 +74,17 @@ async function phase1() {
 async function phaseQr() {
   const g = await fetch(BASE + '/get'); const t = await g.text();
   ok('the install page shows a QR code and the download button', g.status === 200 && /<svg[^>]*aria-label="QR code/.test(t) && /Download the app/.test(t) && /Get the EKP11 Snap app/.test(t));
+  const IPH = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+  const ip = await (await fetch(BASE + '/get', { headers: { 'user-agent': IPH } })).text();
+  ok('iPhone sees Safari Add to Home Screen steps, no APK', /Add to Home Screen/.test(ip) && /Safari/.test(ip) && !/get\/app\.apk/.test(ip) && !/Not in Safari|You are not in Safari/.test(ip));
+  const ig = await (await fetch(BASE + '/get', { headers: { 'user-agent': IPH.replace(' Version/17.5', '').replace(' Safari/604.1', '') + ' Instagram 300' } })).text();
+  ok('iPhone inside another app is told to open Safari', /You are not in Safari/.test(ig));
+  const an = await (await fetch(BASE + '/get', { headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/126 Mobile Safari/537.36' } })).text();
+  ok('Android still sees the app download steps', /Download the app/.test(an) && !/Add to Home Screen<\/b>\.<\/li>/.test(an));
+  const lg = await (await fetch(BASE + '/login')).text();
+  const demoSkin = /Demo Waste/.test(lg);
+  ok('sign-in page has a useful way to ask for an account', demoSkin ? /Want this for your business\?/.test(lg) && /href="https:\/\/cleanupsnap\.co\.uk"/.test(lg) : /wa\.me\/447850464204/.test(lg) && /tel:\+447850464204/.test(lg));
+  ok('sign-in page no longer ends in a dead end', !/Ask .* to add you\.<\/p>\s*$/.test(lg));
   const q = await fetch(BASE + '/get/qr.svg'); ok('the QR code is served as an image', q.status === 200 && /svg/.test(q.headers.get('content-type')));
 }
 async function phase2() {

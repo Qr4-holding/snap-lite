@@ -95,12 +95,21 @@ async function qrSvg(url) { if (!qrCache.has(url)) qrCache.set(url, await QRCode
 app.get('/get/qr.svg', async (req, res, next) => { try { res.set('Cache-Control', 'no-cache').type('image/svg+xml').send(await qrSvg(`https://${req.get('host')}/get`)); } catch (e) { next(e); } });
 app.get('/get', async (req, res, next) => { try {
   const qr = await qrSvg(`https://${req.get('host')}/get`);
+  const ua = String(req.get('user-agent') || '');
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && /Mobile\//.test(ua));
+  const inApp = /FBAN|FBAV|Instagram|WhatsApp|Line\/|MicroMessenger|Snapchat|GSA\//.test(ua) || (ios && !/Safari\//.test(ua));
   const have = fs.existsSync(APK), mb = have ? (fs.statSync(APK).size / 1048576).toFixed(1) : '';
-  res.set('Cache-Control', 'no-cache').send(ui.page('Install the app', `
-<h1 style="text-align:center;margin-bottom:4px">Get the ${SKIN.app_name || SKIN.name} app</h1>
-<p style="text-align:center;margin:0 0 12px;font-weight:700">Point your phone's camera at the code</p>
-<div style="width:min(300px,80vw);margin:0 auto 16px;padding:14px;border:4px solid var(--a);border-radius:20px;background:#fff;line-height:0">${qr.replace('<svg ', '<svg style="width:100%;height:auto" role="img" aria-label="QR code to install the app" ')}</div>
-${have ? `<h2 style="text-align:center">Or install it on this phone</h2><a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${(fs.existsSync(path.join(__dirname, 'apk', 'version.txt')) ? fs.readFileSync(path.join(__dirname, 'apk', 'version.txt'), 'utf8').trim() : process.env.APP_VERSION) || ''}.</p>
+  const host = esc(req.get('host'));
+  const iosSteps = `<h2>Put the app on your iPhone</h2>
+${inApp ? `<p class="msg bad" role="alert"><b>You are not in Safari.</b> Tap the Share or ⋯ button and choose <b>Open in Safari</b> (or copy <b>${host}</b> into Safari). The next steps only work in Safari.</p>` : ''}
+<ol style="padding-left:22px;display:grid;gap:12px">
+<li><b>Open ${host} in Safari</b> (the blue compass icon), not from inside WhatsApp or Facebook.</li>
+<li>Tap the <b>Share</b> button: the square with an arrow pointing up, at the bottom of the screen.</li>
+<li>Scroll down and tap <b>Add to Home Screen</b>.</li>
+<li>Tap <b>Add</b> in the top right.</li>
+<li>Open the new icon on your Home Screen and sign in with the email and password you were given.</li></ol>
+<p class="small">Always open the app from that icon, and sign in there. It is a separate place from Safari, so you sign in once inside it.</p>`;
+  const androidSteps = `${have ? `<h2 style="text-align:center">Or install it on this phone</h2><a class="btn" href="/get/app.apk" style="margin:8px 0 6px">Download the app (${mb} MB)</a><p class="small">For Android phones. Version ${esc((() => { try { return fs.readFileSync(path.join(__dirname, 'apk', 'version.txt'), 'utf8').trim(); } catch (e) { return ''; } })())}.</p>
 <h2>Then, on your phone</h2>
 <ol style="padding-left:22px;display:grid;gap:10px">
 <li><b>Tap the download.</b> If Chrome says the file may be harmful, tap <b>Download anyway</b>. It is our own app.</li>
@@ -108,7 +117,12 @@ ${have ? `<h2 style="text-align:center">Or install it on this phone</h2><a class
 <li>Android asks to allow installs from Chrome: tap <b>Settings</b>, switch <b>Allow from this source</b> on, then press Back.</li>
 <li>Tap <b>Install</b>, then <b>Open</b>. Sign in with the email and password you were given.</li></ol>
 <p class="small">If a Play Protect box appears, tap <b>More details</b> then <b>Install anyway</b>.</p>` : '<p class="msg">The app file is not ready yet.</p>'}
-<h2>No download?</h2><p>Open <b>${esc(req.get('host'))}</b> in Chrome and use the menu <b>⋮</b> → <b>Add to Home screen</b>.</p>`, {}));
+<h2>No download?</h2><p>Open <b>${host}</b> in Chrome and use the menu <b>⋮</b> → <b>Add to Home screen</b>.</p>`;
+  res.set({ 'Cache-Control': 'no-cache', 'Vary': 'User-Agent' }).send(ui.page('Install the app', `
+<h1 style="text-align:center;margin-bottom:4px">Get the ${esc(SKIN.app_name || SKIN.name)} app</h1>
+${ios ? '' : `<p style="text-align:center;margin:0 0 12px;font-weight:700">Point your phone's camera at the code</p>
+<div style="width:min(300px,80vw);margin:0 auto 16px;padding:14px;border:4px solid var(--a);border-radius:20px;background:#fff;line-height:0">${qr.replace('<svg ', '<svg style="width:100%;height:auto" role="img" aria-label="QR code to install the app" ')}</div>`}
+${ios ? iosSteps : androidSteps}`, {}));
 } catch (e) { next(e); } });
 
 // ---------- modules ----------
