@@ -9,12 +9,15 @@ const MAX_WORDS = 11;
 module.exports = function lines(SKIN, secrets) {
   const allowed = (SKIN.facts_allowed || []).map(s => String(s).toLowerCase());
   const name = SKIN.short_name || SKIN.name;
-  const NAMEOK = new Set([name.toLowerCase(), 'ekp11', 'ekp', 'i']);
+  // words that may appear capitalised in a line: the business name in its various forms (never place names)
+  const NAMEOK = new Set(['i']);
+  for (const w of `${SKIN.id} ${SKIN.short_name || ''} ${SKIN.name} ${SKIN.spoken_name || ''}`.split(/[^A-Za-z0-9]+/).filter(Boolean)) { NAMEOK.add(w.toLowerCase()); NAMEOK.add(w.replace(/\d+/g, '').toLowerCase()); }
+  NAMEOK.delete('');
 
   // Returns { text, removed: [{what, why}], ok } for one line.
   function sanitizeLine(raw) {
     let t = String(raw || '').replace(/\s+/g, ' ').trim(); const removed = [];
-    t = t.replace(/EKP\s?11(\s+Waste\s+Management)?/gi, 'ZZBRANDZZ');
+    t = t.replace(SKIN.brandRe, 'ZZBRANDZZ');
     const take = (re, why) => { t = t.replace(re, m => { removed.push({ what: m.trim(), why }); return ' '; }); };
     take(/[£$€]\s*\d[\d,.]*/g, 'prices are never spoken');
     take(/\d[\d,.]*\s*(?:%|p\b)?/g, 'no numbers or digits');
@@ -24,7 +27,7 @@ module.exports = function lines(SKIN, secrets) {
     const words = t.split(' ');
     const kept = words.map((w, i) => {
       const bare = w.replace(/[^A-Za-z0-9']/g, ''); const startOfSentence = i === 0 || /[.!?]$/.test(words[i - 1]);
-      if (!startOfSentence && /^[A-Z][a-z]{2,}$/.test(bare) && !NAMEOK.has(bare.toLowerCase()) && !/^(Waste|Management)$/.test(bare)) { removed.push({ what: bare, why: 'no town or place names' }); return ''; }
+      if (!startOfSentence && /^[A-Z][a-z]{2,}$/.test(bare) && !NAMEOK.has(bare.toLowerCase()) && !/^(Waste|Management|Services)$/.test(bare)) { removed.push({ what: bare, why: 'no town or place names' }); return ''; }
       return w;
     });
     t = kept.join(' ').replace(/\s+/g, ' ').replace(/\s+([,.!?;:])/g, '$1').replace(/^[\s,;:.\-–]+/, '').trim();

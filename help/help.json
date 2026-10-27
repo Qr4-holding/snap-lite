@@ -1,0 +1,7 @@
+[
+  { "id": "install", "title": "How to put the app on your phone", "public": true },
+  { "id": "photos", "title": "Take the before and after photos" },
+  { "id": "video", "title": "Make the video and choose a voice" },
+  { "id": "share", "title": "Approve the video and share it" },
+  { "id": "password", "title": "If you forget your password" }
+]

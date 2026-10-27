@@ -1,0 +1,35 @@
+{
+  "id": "demo",
+  "name": "Demo Waste Services",
+  "app_name": "Demo Snap",
+  "short_name": "Demo",
+  "app_id": "uk.co.cleanupsnap.demo",
+  "accent": "#2E7D4F",
+  "ink": "#1F2124",
+  "logo": "logo.png",
+  "tagline": "Before and after, made easy.",
+  "web": "demowasteservices.example",
+  "phone": "0100 000 0000",
+  "email": "hello@demowasteservices.example",
+  "end_card": {
+    "headline": "See the job before you book.",
+    "button": "Get a free quote",
+    "hold_seconds": 5
+  },
+  "voices": [
+    { "id": "IosqM5LMIzqPfT0efhhy", "label": "Kerry" },
+    { "id": "T9bEpk4Va2Kpk1mZWay7", "label": "Darren (warm Northern male)" }
+  ],
+  "job_types": ["House clearance", "Garden", "Garage", "Builders' waste", "Cardboard and packaging", "Commercial yard", "Other"],
+  "max_during": 3,
+  "crew_enabled": true,
+  "crew_can_capture": true,
+  "orientation": "auto",
+  "spoken_name": "Demo Waste Services",
+  "script_rules": [
+    "Plain, specific, UK English. No digits, no pound signs.",
+    "Never use: best, cheapest, guaranteed, vetted, certified, number one, award.",
+    "No town or street names. Do not claim anything outside facts_allowed."
+  ],
+  "facts_allowed": []
+}

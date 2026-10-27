@@ -14,7 +14,7 @@ module.exports = function voice({ app, pool, SKIN, ui, acct, jobsMod, getRender,
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const voices = SKIN.voices || [];
   const spokenName = SKIN.spoken_name || SKIN.short_name || SKIN.name;
-  const spoken = t => String(t).replace(/EKP\s?11/gi, spokenName);
+  const spoken = t => String(t).replace(SKIN.brandRe, spokenName);
   const splitScript = s => String(s || '').split(/\n\s*\n/).map(x => x.trim());
 
   const mine = (u, j) => j && (u.role === 'owner' || j.user_id === u.id);

@@ -1,4 +1,5 @@
-# Snap Lite (SKIN=ekp11) + its own PostgreSQL, as deployed on the Hostinger VPS (Docker manager project "snaplite").
+# Snap Lite (SKIN from the project environment, default ekp11) + its own PostgreSQL, as deployed on the Hostinger VPS.
+# One project per client from this same file: "snaplite" (ekp11) and "snaplitedemo" (SKIN=demo). Extra variables: SKIN, PRIMARY_HOST, LEGACY_HOSTS.
 # Project environment (set on the server only, never in this repo):
 #   DB_PASSWORD, ADMIN_PASSWORD, SITE_HOSTS (the domain Caddy serves), APP_VERSION, ANDROID_APK_URL (later),
 #   ELEVENLABS_API_KEY and ANTHROPIC_API_KEY (phase 5; or pasted at /admin/ai later)
@@ -9,7 +10,9 @@ services:
     command: ["sh", "-c", "apk add --no-cache git ffmpeg python3 py3-pillow >/dev/null && rm -rf /app && git clone --depth 1 https://github.com/Qr4-holding/snap-lite.git /app && cd /app && npm install --omit=dev --no-audit --no-fund && exec node server.js"]
     environment:
       - NODE_ENV=production
-      - SKIN=ekp11
+      - SKIN=${SKIN:-ekp11}
+      - PRIMARY_HOST=${PRIMARY_HOST:-}
+      - LEGACY_HOSTS=${LEGACY_HOSTS:-}
       - DATABASE_URL=postgres://sl:${DB_PASSWORD}@db:5432/sl
       - ADMIN_USER=admin
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}

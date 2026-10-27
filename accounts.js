@@ -98,7 +98,7 @@ ${msg(m, true)}
 <label class="f">Password<input name="password" type="password" required autocomplete="current-password"></label>
 <button type="submit">Sign in</button>
 </form>
-<p><a href="/forgot">Forgot password?</a></p>
+<p><a href="/forgot">Forgot password?</a> &nbsp;·&nbsp; <a href="/help">How does this work?</a></p>
 <p class="small">No account yet? Accounts are set up for you. Ask ${esc(SKIN.name)} to add you.</p>`);
 
   app.get('/login', async (req, res, next) => { try {
@@ -134,6 +134,7 @@ ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c
 ${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div class="jobs">${people.map(c => `<div class="card"><b>${esc(c.email)}</b> <span class="small">(${c.role})</span><form method="post" action="/settings/users/${c.id}/reset" onsubmit="return confirm('Reset this password? They will be signed out.')"><button class="sec small" type="submit">Reset password</button></form></div>`).join('')}</div>` : ''}
 <h2>Change password</h2>
 <form class="card" method="post" action="/settings/password"><label class="f">Current password<input name="current" type="password" required autocomplete="current-password"></label><label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>
+<h2>Help</h2><p><a class="btn sec" href="/help">How does this work? (short videos)</a></p>
 <h2>App</h2><p class="small">Version <span id="v">${esc(process.env.APP_VERSION || 'dev')}</span></p>
 <form method="post" action="/logout"><button class="sec" type="submit">Sign out</button></form>
 <h2>Delete my account</h2>

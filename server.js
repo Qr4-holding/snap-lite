@@ -23,6 +23,15 @@ app.use((req, res, next) => {
   next();
 });
 
+// An old address keeps working by sending people to the new one (set PRIMARY_HOST and LEGACY_HOSTS). Two things stay on the old host:
+// the Android verification file (it must not redirect) and /health.
+const PRIMARY = (process.env.PRIMARY_HOST || '').trim().toLowerCase();
+const LEGACY = new Set((process.env.LEGACY_HOSTS || '').toLowerCase().split(/[\s,]+/).filter(Boolean));
+app.use((req, res, next) => {
+  if (!PRIMARY || !LEGACY.has(String(req.hostname || '').toLowerCase()) || req.path === '/.well-known/assetlinks.json' || req.path === '/health') return next();
+  res.redirect(req.method === 'GET' || req.method === 'HEAD' ? 302 : 307, `https://${PRIMARY}${req.originalUrl}`);
+});
+
 // ---------- small shared bits ----------
 async function initDb(tries = 30) {
   for (let i = 0; i < tries; i++) {
@@ -73,7 +82,13 @@ const APK = path.join(__dirname, 'apk', `${SKIN.id}-snap.apk`);
 app.get('/get/app.apk', (req, res) => fs.existsSync(APK)
   ? res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': `attachment; filename="${SKIN.id}-snap.apk"`, 'Cache-Control': 'no-cache' }).sendFile(APK)
   : res.status(404).type('text/plain').send('Not found'));
-app.get('/.well-known/assetlinks.json', (req, res) => { const f = path.join(__dirname, 'apk', 'assetlinks.json'); fs.existsSync(f) ? res.type('application/json').sendFile(f) : res.status(404).end(); });
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  // only this skin's own app is listed (one assetlinks file holds the entries for every skin's app)
+  try {
+    const all = JSON.parse(fs.readFileSync(path.join(__dirname, 'apk', 'assetlinks.json'), 'utf8')).filter(e => e.target && e.target.package_name === SKIN.app_id);
+    return all.length ? res.set('Cache-Control', 'no-cache').type('application/json').send(JSON.stringify(all)) : res.status(404).end();
+  } catch (e) { res.status(404).end(); }
+});
 const QRCode = require('qrcode');
 const qrCache = new Map();
 async function qrSvg(url) { if (!qrCache.has(url)) qrCache.set(url, await QRCode.toString(url, { type: 'svg', margin: 1, width: 260, errorCorrectionLevel: 'M', color: { dark: SKIN.ink || '#1F2124', light: '#ffffff' } })); return qrCache.get(url); }
@@ -102,6 +117,7 @@ let mailMod;
 const acct = require('./accounts')({ app, pool, SKIN, ui, events, getMail: () => mailMod });
 mailMod = require('./mail')(secrets, SKIN, acct.TEST_DOMAIN);
 let shareMod;
+const helpMod = require('./help')({ app, SKIN, ui, acct });
 const diagMod = require('./diag')({ app, pool, SKIN, ui, acct });
 const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, diag: diagMod, getShare: () => shareMod });
 shareMod = require('./share')({ app, pool, SKIN, ui, acct, jobsMod, events });
