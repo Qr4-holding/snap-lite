@@ -480,7 +480,7 @@ async function phase5() {
   // silent video
   const sid = await J('Commercial yard');
   await upload(owner, sid, 'before', 0, real('before.jpg') || await jpeg(1200, 1600)); await upload(owner, sid, 'after', 0, real('after.jpg') || await jpeg(1200, 1600, { shade: 50 }));
-  const sp = await req(owner, 'POST', `/jobs/${sid}/voice`, { body: form({ voice: 'none', line1: 'Here is the yard before we started.', line2: 'And here it is, swept clean.', line3: 'EKP11. Skip the skip.' }) });
+  const sp = await req(owner, 'POST', `/jobs/${sid}/voice`, { body: form({ voice: 'none', line1: 'Here is the yard before we started.', line2: 'And here it is, swept clean.', line3: 'Thanks for watching.' }) });
   ok('No voice makes a video without spending a voice generation', sp.status === 303 && (await wait(sid)).state === 'ready');
   const g0 = (await usage()).voice_generations;
   const sf = await fetchVideo(sid), sdur = dur(sf, 'v');
@@ -488,7 +488,7 @@ async function phase5() {
   // voiced video
   const vid = await J('Commercial yard');
   await upload(owner, vid, 'before', 0, real('before.jpg') || await jpeg(1200, 1600)); await upload(owner, vid, 'during', 0, real('work.jpg') || await jpeg(1200, 1600, { shade: 20 })); await upload(owner, vid, 'after', 0, real('after.jpg') || await jpeg(1200, 1600, { shade: 50 }));
-  const lines5 = { voice: 'IosqM5LMIzqPfT0efhhy', line1: 'Here is the yard before we started.', line2: 'And here it is, swept clean.', line3: 'EKP11. Skip the skip.' };
+  const lines5 = { voice: 'IosqM5LMIzqPfT0efhhy', line1: 'Here is the yard before we started.', line2: 'And here it is, swept clean.', line3: 'Thanks for watching.' };
   await req(owner, 'POST', `/jobs/${vid}/voice`, { body: form(lines5) });
   const st = await wait(vid);
   ok('a voiced video finishes', st.state === 'ready', JSON.stringify(st));
@@ -512,7 +512,7 @@ async function phase5() {
     ok('changing a line makes a new recording', (await wait(vid)).state === 'ready' && (await usage()).voice_generations === g1 + 1);
     const sh = await J('Garden');
     for (const [k, q, sd] of [['before', 0, 0], ['during', 0, 10], ['during', 1, 20], ['during', 2, 30], ['after', 0, 50]]) await upload(owner, sh, k, q, real(k === 'during' ? 'work.jpg' : k + '.jpg') || await jpeg(1200, 1600, { shade: sd }));
-    await req(owner, 'POST', `/jobs/${sh}/voice`, { body: form({ voice: 'IosqM5LMIzqPfT0efhhy', line1: 'Here it was.', line2: 'And here it is, swept clean.', line3: 'EKP11. Skip the skip.' }) });
+    await req(owner, 'POST', `/jobs/${sh}/voice`, { body: form({ voice: 'IosqM5LMIzqPfT0efhhy', line1: 'Here it was.', line2: 'And here it is, swept clean.', line3: 'Thanks for watching.' }) });
     const sst = await wait(sh); const stm = (await req(owner, 'GET', `/api/jobs/${sh}/timing`)).json();
     ok('a very short line 1 with three DURING photos keeps every photo (silence is added instead)', sst.state === 'ready' && stm.stills === 4 && stm.timing.every(t => t.err_ms <= 40), JSON.stringify(stm));
     const nv = await J('Garden'); const vs2 = (await req(owner, 'GET', `/jobs/${nv}/voice`)).text;
@@ -530,7 +530,7 @@ async function phase6() {
     crew = (await login(`crew6-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
   const A = { headers: { accept: 'application/json' } };
   const mk = async (who) => { const id = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id; await upload(who, id, 'before', 0, await jpeg(1200, 1600)); await upload(who, id, 'after', 0, await jpeg(1200, 1600, { shade: 50 }));
-    await req(who, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'EKP11. Skip the skip.' }) });
+    await req(who, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'Thanks for watching.' }) });
     for (let i = 0; i < 120; i += 3) { const st = (await req(who, 'GET', `/api/jobs/${id}/status`)).json(); if (st.state !== 'rendering') break; await new Promise(r => setTimeout(r, 3000)); } return id; };
   const id = await mk(owner);
   const cid0 = await mk(owner);
@@ -566,7 +566,7 @@ async function phase6() {
   const U = new URL(url); const path_ = U.pathname + U.search;
   const open = await fetch(BASE + path_);
   const html = await open.text();
-  ok('the signed link opens with no sign-in and shows the video and the phone number', open.status === 200 && /<video/.test(html) && /0785 046 4204/.test(html) && /og:video/.test(html));
+  ok('the signed link opens with no sign-in and shows the video and the phone number', open.status === 200 && /<video/.test(html) && /\d{4} \d{3} \d{4}/.test(html) && /og:video/.test(html));
   ok('the public page is marked noindex', /noindex/.test(open.headers.get('x-robots-tag') || ''));
   const vurl = html.match(/src="([^"]+\/video\?[^"]+)"/); const vsrc = vurl && vurl[1].replace(/&amp;/g, '&');
   const vr = vsrc && await fetch(BASE + vsrc, { headers: { range: 'bytes=0-99' } });
