@@ -3,6 +3,7 @@
 // Phase 2 and 3 create throw-away accounts @snaplite-test.invalid and remove them at the end.
 const http = require('http');
 const sharp = require('sharp');
+const fs = require('fs'), path = require('path');
 
 const BASE = (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const ADMIN = process.env.ADMIN_USER || 'admin', ADMIN_PW = process.env.ADMIN_PASSWORD || '';
