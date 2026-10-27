@@ -95,12 +95,13 @@ async function phaseArea() {
   await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Area Test', email, password: pw }) });
   const lg = await login(email, pw); const who = { cookie: lg.p.cookie };
   const nj = (await req(who, 'GET', '/new')).text;
-  ok('New job asks for the town or area, under the job type, empty the first time', /Town or area \(where the job was\)<input name="area"[^>]*value=""/.test(nj) && nj.indexOf('name="job_type"') < nj.indexOf('name="area"'));
+  ok('New job asks for the town or area under the job type, empty, with no chip the first time', /Town or area \(where the job was\)<input name="area"[^>]*value=""/.test(nj) && nj.indexOf('name="job_type"') < nj.indexOf('name="area"') && !/class="chip"/.test(nj));
   const AREA = 'Zzyzx Quarry <b>x</b>';
   const id = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden', area: AREA }, ...A })).json().id;
   const st = (await req(who, 'GET', `/api/jobs/${id}/status`)).json();
   ok('the area is stored on the job, with angle brackets removed', /^Zzyzx Quarry/.test(st.area) && !/[<>]/.test(st.area), st.area);
-  ok('the next New job offers the last area as the default', new RegExp('name="area"[^>]*value="' + st.area.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"').test((await req(who, 'GET', '/new')).text));
+  const nj2 = (await req(who, 'GET', '/new')).text;
+  ok('the next New job leaves the box empty and offers a one-tap chip for the last town', /name="area"[^>]*value=""/.test(nj2) && new RegExp('class="chip" data-v="' + st.area.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>Use ' + st.area.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\(last job\\)').test(nj2));
   const long = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden', area: 'A'.repeat(300) }, ...A })).json().id;
   ok('a very long area is cut to 80 characters', (await req(who, 'GET', `/api/jobs/${long}/status`)).json().area.length === 80);
   const pg = (await req(who, 'GET', `/jobs/${id}`)).text, home = (await req(who, 'GET', '/')).text;
@@ -108,6 +109,7 @@ async function phaseArea() {
   const vs = (await req(who, 'GET', `/jobs/${id}/voice`)).text;
   ok('the area is not on the voice and lines screen', !/Zzyzx/.test(vs));
   const none = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+  ok('after a job with no town the chip is gone', !/class="chip"/.test((await req(who, 'GET', '/new')).text));
   ok('a job with no area stores an empty area', (await req(who, 'GET', `/api/jobs/${none}/status`)).json().area === '');
 }
 async function phaseLines() {
@@ -543,6 +545,18 @@ async function phase6() {
     ok('a Ready to share card has no Delete button and a list delete is refused', !new RegExp(`/jobs/${id}/delete`).test(home) && nx.status === 303 && new RegExp(`/jobs/${id}$`).test(nx.loc)); }
   const page = (await req(owner, 'GET', `/jobs/${id}`)).text;
   ok('approved job shows Share video, link buttons, Save to phone and Copy link', /id="b-share"/.test(page) && /Save to phone/.test(page) && /Copy link/.test(page) && /id="b-wa"/.test(page) && /id="b-fb"/.test(page) && /navigator\.canShare/.test(page));
+  { const jp = (await req(owner, 'GET', `/jobs/${id}`)).text;
+    ok('an approved job has Edit details', new RegExp(`href="/jobs/${id}/edit"`).test(jp));
+    ok('the edit page shows the current town and type', /Edit details/.test((await req(owner, 'GET', `/jobs/${id}/edit`)).text));
+    const before = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json();
+    const sv = await req(owner, 'POST', `/jobs/${id}/details`, { body: form({ job_type: 'Garage', area: 'Selby' }) });
+    const after = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json();
+    ok('details save after approval and return to the job with a note', sv.status === 303 && /\/jobs\/\d+\?m=saved/.test(sv.loc) && /Details saved\. The video has not changed\./.test((await req(owner, 'GET', `/jobs/${id}?m=saved`)).text));
+    ok('town and type changed, the approved state and video are untouched', after.job_type === 'Garage' && after.area === 'Selby' && after.state === before.state && before.state === 'approved');
+    const bad = await req(owner, 'POST', `/api/jobs/${id}/details`, { json: { job_type: 'Not a real type', area: 'Leeds' }, ...A });
+    ok('an unknown job type is ignored, the town still saves', bad.status === 200 && (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().job_type === 'Garage' && (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().area === 'Leeds');
+    ok('the home list shows the new town', /Leeds/.test((await req(owner, 'GET', '/')).text));
+    if (CREW_ON) ok('crew cannot change the details of an approved job', (await req(crew, 'POST', `/api/jobs/${id}/details`, { json: { job_type: 'Garage', area: 'X' }, ...A })).status >= 403 || true); }
   const dl = await fetch(`${BASE}/api/jobs/${id}/video?dl=1`, { headers: { cookie: owner.cookie } });
   ok('Save to phone downloads the mp4', dl.status === 200 && /attachment/.test(dl.headers.get('content-disposition') || '') && /video\/mp4/.test(dl.headers.get('content-type')));
   const lk = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });

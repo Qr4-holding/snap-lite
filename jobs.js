@@ -180,6 +180,37 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     if (req.body && req.body.list) { const jj = await getJob(req.user, req.params.id); if (jj && !['draft', 'failed'].includes(jj.state)) return res.redirect(303, `/jobs/${jj.id}`); }
     await removeJob(req.user, req.params.id); res.redirect(303, '/?m=deleted');
   } catch (e) { next(e); } });
+  // town and job type: only the list and the hub use them, never the video, so they can change at any stage with no remake and no re-approval
+  const mayEditDetails = (u, j) => j && (u.role === 'owner' || canEdit(u, j));
+  app.get('/jobs/:id/edit', needUser(), async (req, res, next) => { try {
+    const j = await getJob(req.user, req.params.id);
+    if (!mayEditDetails(req.user, j)) return res.redirect(303, j ? `/jobs/${j.id}` : '/');
+    const types = SKIN.job_types.includes(j.job_type) || !j.job_type ? SKIN.job_types : [j.job_type, ...SKIN.job_types];
+    res.set('Cache-Control', 'no-store').send(page('Edit details', `
+<h1>Edit details</h1>
+<form class="card" method="post" action="/jobs/${j.id}/details"><label class="f">What was the job?<select name="job_type">${types.map(t => `<option${t === j.job_type ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
+<label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="${esc(j.area || '')}" placeholder="For example: Selby"></label>
+<p class="small" style="margin:0">These show on your job list and with the job when it is posted. They are not in the video, so nothing is remade and nothing needs approving again.</p>
+<button type="submit">Save details</button></form>
+<a class="btn sec" href="/jobs/${j.id}" style="margin-top:10px">Back to the job</a>`, { user: req.user }));
+  } catch (e) { next(e); } });
+  const saveDetails = async (req, res) => {
+    const j = await getJob(req.user, req.params.id);
+    if (!mayEditDetails(req.user, j)) return { code: j ? 403 : 404, j };
+    const b = req.body || {}, type = clean(b.job_type, 60);
+    const job_type = SKIN.job_types.includes(type) || type === j.job_type ? type : j.job_type;
+    await pool.query('UPDATE jobs SET job_type=$2, area=$3 WHERE id=$1', [j.id, job_type, cleanArea(b.area)]);   // state, video and voice are left alone
+    events('details_edited', req.user.id, j.id);
+    return { code: 200, j };
+  };
+  app.post('/jobs/:id/details', sameOrigin, needUser(), form, async (req, res, next) => { try {
+    const r = await saveDetails(req, res);
+    res.redirect(303, r.code === 200 ? `/jobs/${r.j.id}?m=saved` : (r.j ? `/jobs/${r.j.id}` : '/'));
+  } catch (e) { next(e); } });
+  app.post('/api/jobs/:id/details', sameOrigin, needUser({ json: true }), express.json({ limit: '2kb' }), async (req, res, next) => { try {
+    const r = await saveDetails(req, res);
+    res.status(r.code).json(r.code === 200 ? { ok: true } : { error: r.code === 404 ? "We can't find that job. Go back to Jobs and try again." : 'Only the owner can change the details of a job that has a video.' });
+  } catch (e) { next(e); } });
   app.post('/jobs/:id/approve', sameOrigin, needUser(), needOwner, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (j && j.state === 'ready') { await pool.query("UPDATE jobs SET state='approved' WHERE id=$1", [j.id]); events('approved', req.user.id, j.id); }
@@ -211,7 +242,7 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'own
     res.set('Cache-Control', 'no-store').send(page('New job', `
 <h1>New job</h1>
 <form class="card" method="post" action="/api/jobs"><label class="f">What was the job?<select name="job_type">${SKIN.job_types.map(t => `<option>${esc(t)}</option>`).join('')}</select></label>
-<label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="${esc(last ? last.value : '')}" placeholder="For example: Selby"></label>
+<label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="" placeholder="For example: Selby"></label>${last && last.value ? `<button type="button" class="chip" data-v="${esc(last.value)}" onclick="var i=document.querySelector('[name=area]');i.value=this.dataset.v;this.hidden=true;i.focus()">Use ${esc(last.value)} (last job)</button>` : ''}
 <button type="submit">Start: take the before photo</button></form>`, { user: req.user }));
   } catch (e) { next(e); } });
 
@@ -318,6 +349,7 @@ note();
     const done = ['ready', 'approved', 'shared'].includes(j.state);
     const v = encodeURIComponent(j.dur || '') + (j.shared_at ? '' : '');
     const player = done ? `<video id="vid" controls playsinline preload="metadata" poster="/api/jobs/${j.id}/cover" src="/api/jobs/${j.id}/video" style="display:block;margin:0 auto;max-width:100%;width:auto;height:34vh;border-radius:14px;background:#000"></video><button type="button" class="sec small" id="fs" style="margin:6px auto 0">Full screen</button>` : '';
+    const saved = req.query.m === 'saved' ? '<p class="msg" role="status">Details saved. The video has not changed.</p>' : '';
     const notStarted = req.query.m === 'err' ? '<p class="msg bad" role="alert">The video could not be started. Check there is a BEFORE and an AFTER photo, then try again.</p>' : '';
     const busy = j.state === 'rendering' ? '<p class="msg" id="busy">Making your video… this takes about a minute. You can leave this page open.</p>' : '';
     const fail = j.state === 'failed' ? `<p class="msg bad" role="alert">${errs.renderFailure(j.render_error, u.role, SKIN.name)}</p>` : '';
@@ -325,13 +357,14 @@ note();
     const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
     res.set('Cache-Control', 'no-store').send(page('Job', `
 <h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>${j.area ? `<p class="small" style="margin:0 0 8px">📍 ${esc(j.area)}</p>` : ''}
-${notStarted}${busy}${fail}${player}
+${saved}${notStarted}${busy}${fail}${player}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve" style="margin-top:10px"><button type="submit">Approve</button></form>` : ''}
 ${sh ? sh.html : ''}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:12px">
 ${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<a class="btn" href="/jobs/${j.id}/voice">${j.state === 'failed' ? 'Try again' : 'Choose voice and make video'}</a>` : ''}
 ${canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Add or retake photos</a>` : ''}
+${owner || canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/edit">Edit details</a>` : ''}
 ${mine && j.state === 'ready' ? `<a class="btn sec" href="/jobs/${j.id}/voice">Change voice or lines</a>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
 ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
