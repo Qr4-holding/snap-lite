@@ -30,7 +30,10 @@ EOP
 APK=$(find $P -name "*-release.apk" | head -1)
 cp "$APK" ../apk/$SKIN-snap.apk; echo "$VNAME" > ../apk/version.txt
 FP=$(keytool -list -v -keystore "$KEYSTORE" -storepass "$KS_PASS" -alias release 2>/dev/null | grep "SHA256:" | sed 's/.*SHA256: //')
-cat > ../apk/assetlinks.json <<EOP
-[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"$APP_ID","sha256_cert_fingerprints":["$FP"]}}]
-EOP
+# one assetlinks file holds an entry per skin's app (the server only publishes the entry for the skin it runs)
+APP_ID=$APP_ID FP=$FP node -e "
+const fs=require('fs'),f='../apk/assetlinks.json';let a=[];try{a=JSON.parse(fs.readFileSync(f,'utf8'))}catch(e){}
+a=a.filter(e=>e.target.package_name!==process.env.APP_ID);
+a.push({relation:['delegate_permission/common.handle_all_urls'],target:{namespace:'android_app',package_name:process.env.APP_ID,sha256_cert_fingerprints:[process.env.FP]}});
+fs.writeFileSync(f,JSON.stringify(a))"
 echo "APK: apk/$SKIN-snap.apk  fingerprint $FP"

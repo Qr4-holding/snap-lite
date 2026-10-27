@@ -67,7 +67,8 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
   } catch (e) { next(e); } });
 
   app.post('/admin/owner', auth, sameOrigin, form, async (req, res, next) => { try {
-    try { await acct.createUser({ email: req.body.email, password: req.body.password, name: req.body.name, role: 'owner' }); }
+    try { const u = await acct.createUser({ email: req.body.email, password: req.body.password, name: req.body.name, role: 'owner' });
+      if (req.body.must_change) await pool.query('UPDATE users SET must_change=true WHERE id=$1', [u.id]); }   // one-time password: they choose their own at first sign-in
     catch (e) { return res.redirect(303, '/admin?m=bad&why=' + encodeURIComponent(e.message)); }
     res.redirect(303, '/admin?m=owner');
   } catch (e) { next(e); } });
