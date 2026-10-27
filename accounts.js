@@ -134,7 +134,7 @@ ${joinBlock()}`);
     const u = req.user;
     const crew = u.role === 'owner' ? (await pool.query(`SELECT id,email,name,created_at FROM users WHERE biz_id=$1 AND role='crew' AND deleted_at IS NULL ORDER BY id`, [u.biz_id])).rows : [];
     const people = u.role === 'owner' ? (await pool.query(`SELECT id,email,role FROM users WHERE biz_id=$1 AND id<>$2 AND deleted_at IS NULL ORDER BY id`, [u.biz_id, u.id])).rows : [];
-    const q = req.query, flash = { invited: '', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
+    const q = req.query, flash = { invited: '', keys: 'Keys saved.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
     res.set('Cache-Control', 'no-store').send(page('Settings', `
 <h1>Settings</h1>${msg(flash, /^(bad|dup|badpw)$/.test(q.m || ''))}${invited}

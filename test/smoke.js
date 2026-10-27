@@ -71,6 +71,20 @@ async function phase1() {
   ok('security headers present', h.headers.get('x-content-type-options') === 'nosniff' && /noindex/.test(h.headers.get('x-robots-tag') || ''));
 }
 
+async function phaseAdminBack() {
+  console.log('\n== Admin: way back to the app ==');
+  if (!ADMIN_PW) return;
+  for (const p of ['/admin', '/admin/jobs']) {
+    const h = (await req(admin(), 'GET', p)).text;
+    ok(`${p} has Back to the app at the top and bottom`, (h.match(/href="\/" class="back">← Back to the app/g) || []).length === 2 && h.indexOf('Back to the app') < h.indexOf('<h1'), p);
+  }
+  const ad = (await req(admin(), 'GET', '/admin')).text;
+  ok('the Keys form has Save keys and go back', /name="back" value="1">Save keys and go back/.test(ad));
+  const r = await req(admin(), 'POST', '/admin/keys', { body: form({ back: '1' }) });
+  ok('Save keys and go back returns to Settings', r.status === 303 && /^(https?:\/\/[^/]+)?\/settings\?m=keys$/.test(r.loc), r.status + ' ' + r.loc);
+  const r2 = await req(admin(), 'POST', '/admin/keys', { body: form({}) });
+  ok('plain Save keys stays on the admin page', r2.status === 303 && /\/admin\?m=keys$/.test(r2.loc), r2.loc);
+}
 async function phaseErrors() {
   console.log('\n== Plain-words errors ==');
   const E = require('../lib/errors'), BAD = /server|key\b|api|elevenlabs|status|\b[45]\d\d\b|undefined|\[object/i;
@@ -664,6 +678,7 @@ async function engine() {
     if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['help', 'all'].includes(which)) await phaseHelp();
     if (['errors', 'all'].includes(which)) await phaseErrors();
+    if (['adminback', 'all'].includes(which)) await phaseAdminBack();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
