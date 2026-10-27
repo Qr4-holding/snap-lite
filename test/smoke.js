@@ -110,6 +110,36 @@ async function phaseArea() {
   const none = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
   ok('a job with no area stores an empty area', (await req(who, 'GET', `/api/jobs/${none}/status`)).json().area === '');
 }
+async function phaseLines() {
+  console.log('\n== Line filter (both skins) ==');
+  const { execFileSync } = require('child_process');
+  const root = path.join(__dirname, '..');
+  const run = (skin, arr) => JSON.parse(execFileSync('node', ['-e', `const S=require('./lib/skin');const L=require('./lines')(S,{get:async()=>null});process.stdout.write(JSON.stringify({s:L.sanitize(${JSON.stringify(arr)}),t:L.templateLines('Garden')}))`], { cwd: root, env: { ...process.env, SKIN: skin } }).toString());
+  for (const skin of ['ekp11', 'demo']) {
+    const tag = `[${skin}] `;
+    const a = run(skin, ['Here is the house Before we started.', 'Fast Removal, cleared and swept.', 'Call us in Selby or West Yorkshire today.']);
+    ok(tag + 'Before and Removal survive (capitalised for emphasis, not places)', /Before/.test(a.s.lines[0]) && /Removal/.test(a.s.lines[1]), JSON.stringify(a.s.lines));
+    ok(tag + 'real places are still stripped (single and multi-word)', !/Selby|Yorkshire/.test(a.s.lines[2]) && a.s.notes.some(n => /Selby/.test(n.what)) && a.s.notes.some(n => /West Yorkshire/.test(n.what)), JSON.stringify(a.s.notes));
+    const b = run(skin, ['Cleared in Birmingham and Sutton Coldfield.', 'Newcastle upon Tyne to Stoke-on-Trent.', 'Deal with the Reading and Sale Jobs and the bath.']);
+    ok(tag + 'Birmingham, Sutton Coldfield, Newcastle upon Tyne and Stoke-on-Trent go', !/Birmingham|Coldfield|Tyne|Stoke/.test(b.s.lines.join(' ')), b.s.lines.join(' | '));
+    ok(tag + 'everyday words that are also towns survive (Deal, Reading, Sale, bath)', /Deal/.test(b.s.lines[2]) && /Reading/.test(b.s.lines[2]) && /Sale/.test(b.s.lines[2]) && /bath/.test(b.s.lines[2]), b.s.lines[2]);
+    const c = run(skin, ['Every room had 3 sofas, now only £50.', 'It is a 20% saving and 5p less.', 'We tidy up.']);
+    ok(tag + 'figures and prices are still stripped', !/\d|£/.test(c.s.lines.join(' ')), c.s.lines.join(' | '));
+    const nums = c.s.notes.filter(n => /3|£50|20|5p/.test(n.what));
+    ok(tag + 'numbers say why in plain words', nums.length > 0 && nums.every(n => n.why === "We don't put numbers or prices in the voiceover."), JSON.stringify(nums));
+    const d = run(skin, ['Cleared and swept 😀🚛 today ✓', 'Don\'t worry — it\'s “done”, truly… really!', 'Thanks ⭐ ★ •']);
+    ok(tag + 'emojis and decorative symbols are stripped', !/[\u{1F300}-\u{1FAFF}\u2713\u2B50\u2605\u2022]/u.test(d.s.lines.join(' ')) && /Cleared and swept today/.test(d.s.lines[0]), d.s.lines.join(' | '));
+    ok(tag + 'ordinary punctuation and apostrophes stay', /Don't worry — it's “done”, truly… really!/.test(d.s.lines[1]), d.s.lines[1]);
+    const em = d.s.notes.filter(n => n.why.startsWith("Emojis don't work"));
+    ok(tag + 'emoji note says what to do instead', em.length > 0 && em[0].why === "Emojis don't work in the voiceover; use them in your post when you share.", JSON.stringify(d.s.notes));
+    const street = run(skin, ['Cleared on Church Lane today.', 'Down the road and back.', 'Done.']);
+    ok(tag + 'a capitalised street name goes, the plain word road stays', !/Church/.test(street.s.lines[0]) && /road/.test(street.s.lines[1]), street.s.lines.join(' | '));
+  }
+  const dm = run('demo', ['x']);
+  ok('[demo] standard line 3 is "Before and after, made easy."', dm.t[2] === 'Before and after, made easy.', dm.t[2]);
+  const ek = run('ekp11', ['x']);
+  ok('[ekp11] standard line 3 still names the business', /EKP11/.test(ek.t[2]), ek.t[2]);
+}
 async function phaseErrors() {
   console.log('\n== Plain-words errors ==');
   const E = require('../lib/errors'), BAD = /server|key\b|api|elevenlabs|status|\b[45]\d\d\b|undefined|\[object/i;
@@ -703,6 +733,7 @@ async function engine() {
     if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['help', 'all'].includes(which)) await phaseHelp();
     if (['errors', 'all'].includes(which)) await phaseErrors();
+    if (['lines', 'all'].includes(which)) await phaseLines();
     if (['area', 'all'].includes(which)) await phaseArea();
     if (['adminback', 'all'].includes(which)) await phaseAdminBack();
     if (['engine', 'all'].includes(which)) await engine();

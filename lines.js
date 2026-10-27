@@ -3,7 +3,13 @@
 // no places, nothing claimed that the skin has not listed in facts_allowed.
 const BANNED = ['best', 'cheapest', 'cheap', 'guaranteed', 'guarantee', 'vetted', 'certified', 'number one', 'award', 'awards', 'award-winning', 'finest', 'top rated', 'no 1', 'unbeatable', 'perfect', 'amazing'];
 const CLAIMS = ['licensed', 'licenced', 'insured', 'registered', 'accredited', 'family-run', 'family run', 'same day', 'same-day', 'free quote', 'free quotes', 'fully', 'years', 'recycled', 'recycle', 'eco-friendly', 'affordable', 'fast', 'fastest', 'cheaper', 'lowest', 'discount', 'offer', 'trusted', 'reliable', 'professional', 'experienced', 'local', 'nationwide', 'rated'];
-const PLACE_SUFFIX = /\b(street|road|lane|avenue|crescent|terrace)\b/i;
+const PLACES = require('./lib/uk-places');
+// street names such as "Church Lane": a capitalised word followed by a capitalised street word (lower-case "the road" is just a word)
+const STREET_RE = /\b[A-Z][a-z]+\s+(?:Street|Road|Lane|Avenue|Crescent|Terrace|Close|Drive|Way)\b/g;
+// emojis and decorative symbols (ordinary punctuation, apostrophes and dashes stay)
+const SYMBOLS = /(?:[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji_Modifier}\u{1F1E6}-\u{1F1FF}\u200d\ufe0f\u20e3\u2190-\u21ff\u2300-\u23ff\u25a0-\u27bf\u2900-\u297f\u2b00-\u2bff\u2022\u00b7\u2605\u2606\u2122\u00ae\u00a9\u203b\u00a7\u00b6\u2020\u2021]\s*)+/gu;
+const WHY_NUMBERS = "We don't put numbers or prices in the voiceover.";
+const WHY_EMOJI = "Emojis don't work in the voiceover; use them in your post when you share.";
 const MAX_WORDS = 11;
 
 module.exports = function lines(SKIN, secrets) {
@@ -19,15 +25,17 @@ module.exports = function lines(SKIN, secrets) {
     let t = String(raw || '').replace(/\s+/g, ' ').trim(); const removed = [];
     t = t.replace(SKIN.brandRe, 'ZZBRANDZZ');
     const take = (re, why) => { t = t.replace(re, m => { removed.push({ what: m.trim(), why }); return ' '; }); };
-    take(/[£$€]\s*\d[\d,.]*/g, 'prices are never spoken');
-    take(/\d[\d,.]*\s*(?:%|p\b)?/g, 'no numbers or digits');
+    take(SYMBOLS, WHY_EMOJI);
+    take(/[£$€]\s*\d[\d,.]*/g, WHY_NUMBERS);
+    take(/\d[\d,.]*\s*(?:%|p\b)?/g, WHY_NUMBERS);
     for (const w of BANNED.slice().sort((a, b) => b.length - a.length)) take(new RegExp(`\\b${w.replace(/ /g, '\\s+')}\\b`, 'gi'), 'we do not use boasts or superlatives');
     for (const w of CLAIMS) if (!allowed.some(a => a.includes(w))) take(new RegExp(`\\b${w.replace(/ /g, '\\s+')}\\b`, 'gi'), 'claims need Paul\'s confirmation first');
-    take(new RegExp(`\\b\\w+\\s+${PLACE_SUFFIX.source.slice(2, -2)}\\b`, 'gi'), 'no street or place names');
+    take(STREET_RE, 'no street or place names');
+    take(PLACES.MULTI_RE, 'no town or place names');
     const words = t.split(' ');
     const kept = words.map((w, i) => {
       const bare = w.replace(/[^A-Za-z0-9']/g, ''); const startOfSentence = i === 0 || /[.!?]$/.test(words[i - 1]);
-      if (!startOfSentence && /^[A-Z][a-z]{2,}$/.test(bare) && !NAMEOK.has(bare.toLowerCase()) && !/^(Waste|Management|Services)$/.test(bare)) { removed.push({ what: bare, why: 'no town or place names' }); return ''; }
+      if (PLACES.isPlaceWord(bare) && !NAMEOK.has(bare.toLowerCase())) { removed.push({ what: bare, why: 'no town or place names' }); return ''; }
       return w;
     });
     t = kept.join(' ').replace(/\s+/g, ' ').replace(/\s+([,.!?;:])/g, '$1').replace(/^[\s,;:.\-–]+/, '').trim();
@@ -56,7 +64,7 @@ module.exports = function lines(SKIN, secrets) {
   const closer = () => `${name} Waste Management. ${(SKIN.tagline || 'Skip the skip.')}`.replace(/Waste Management Waste Management/, 'Waste Management');
   function templateLines(type) {
     const set = TEMPLATES[type] || TEMPLATES.Other; const pick = set[Math.floor(Math.random() * set.length)];
-    return [pick[0], pick[1], `${name}. ${SKIN.tagline || 'Skip the skip.'}`];
+    return [pick[0], pick[1], SKIN.standard_line3 || `${name}. ${SKIN.tagline || 'Skip the skip.'}`];
   }
 
   async function draft(type) {
