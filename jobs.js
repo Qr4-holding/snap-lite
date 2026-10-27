@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
+const photo = require('./lib/photo');
 const sharp = require('sharp');
 const { clean, esc, sameOrigin } = require('./lib/util');
 
@@ -13,13 +14,13 @@ const MEDIA_DIR = process.env.MEDIA_DIR || '/data/media';
 const JOBS_DIR = path.join(MEDIA_DIR, 'jobs');
 const STATES = ['draft', 'rendering', 'ready', 'approved', 'shared', 'failed'];
 
-module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) {
+module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, diag }) {
   const { page, msg } = ui;
   const { needUser, needOwner } = acct;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch (e) {}
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 6 },
-    fileFilter: (req, file, cb) => cb(null, file.fieldname === 'file' && /^image\//.test(file.mimetype)) });
+    fileFilter: (req, file, cb) => cb(null, file.fieldname === 'file') });   // the type label is not trusted (iPhones can send it blank): the server checks the real bytes
 
   // some clients (EKP11) want only the owner to take photos: skin flag crew_can_capture=false
   const capOk = (req, res, next) => {
@@ -65,30 +66,33 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare }) 
   } catch (e) { next(e); } });
 
   // ---------- one photo at a time ----------
-  const uploadSafe = (req, res, next) => upload.single('file')(req, res, e => e ? res.status(e.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'That photo is too large (25 MB max).' : 'Could not read that upload.' }) : next());
+  const uploadSafe = (req, res, next) => upload.single('file')(req, res, async e => {
+    if (!e) return next();
+    const big = e.code === 'LIMIT_FILE_SIZE', code = await diag.uploadFailure(req, { reason: 'upload rejected: ' + (e.code || e.message), error: e, status: big ? 413 : 400, jobId: parseInt(req.params.id, 10) || null });
+    res.status(big ? 413 : 400).json({ error: (big ? 'That photo is too large (25 MB max).' : 'Could not read that upload.') + ` (code ${code})`, code });
+  });
   app.post('/api/jobs/:id/photos', sameOrigin, needUser({ json: true }), capOk, uploadSafe, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: 'Job not found.' });
     if (!canEdit(req.user, j)) return res.status(409).json({ error: 'This job can no longer be changed.' });
     const kind = ['before', 'during', 'after'].includes(req.body.kind) ? req.body.kind : '';
     const seq = kind === 'during' ? parseInt(req.body.seq, 10) : 0;
-    if (!kind || !req.file || !(seq >= 0) || (kind === 'during' && seq >= SKIN.max_during) || (kind !== 'during' && seq !== 0)) return res.status(400).json({ error: 'Check the photo type and try again.' });
+    if (!kind || !req.file || !(seq >= 0) || (kind === 'during' && seq >= SKIN.max_during) || (kind !== 'during' && seq !== 0)) {
+      const code = await diag.uploadFailure(req, { reason: 'bad request: ' + (!req.file ? 'no file in the request' : 'kind/seq not valid'), status: 400, file: req.file, jobId: j.id });
+      return res.status(400).json({ error: `Check the photo type and try again. (code ${code})`, code });
+    }
     const dir = dirOf(j.id); fs.mkdirSync(dir, { recursive: true });
     const name = `${kind}${seq}`;
-    // re-encode: auto-rotate, cap size, drop GPS and other hidden data
+    // re-encode: find out what the file really is, convert HEIC, auto-rotate, cap size, drop GPS and other hidden data
     let info;
     try {
-      let buf = req.file.buffer;
-      // iPhone photos can arrive as HEIC, which the bundled sharp cannot decode: turn them into JPEG first
-      const isHeic = buf.length > 12 && buf.toString('latin1', 4, 8) === 'ftyp' && /^(heic|heix|hevc|hevx|heim|heis|mif1|msf1)/.test(buf.toString('latin1', 8, 12));
-      const heic = async () => Buffer.from(await require('heic-convert')({ buffer: buf, format: 'JPEG', quality: 0.92 }));
-      if (isHeic) buf = await heic();
-      let img = sharp(buf, { failOn: 'none' }).rotate();
-      try { await img.clone().resize({ width: 8, height: 8, fit: 'inside' }).raw().toBuffer(); }
-      catch (e) { if (isHeic) throw e; buf = await heic(); img = sharp(buf, { failOn: 'none' }).rotate(); }
-      info = await img.clone().resize({ width: 2160, height: 2160, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toFile(path.join(dir, name + '.jpg'));
-      await img.clone().resize({ width: 320, height: 320, fit: 'inside' }).jpeg({ quality: 78 }).toFile(path.join(dir, name + '_t.jpg'));
-    } catch (e) { return res.status(400).json({ error: 'That file is not a photo we can read.' }); }
+      const r = await photo.normalize(req.file.buffer);
+      fs.writeFileSync(path.join(dir, name + '.jpg'), r.full); fs.writeFileSync(path.join(dir, name + '_t.jpg'), r.thumb);
+      info = { width: r.width, height: r.height };
+    } catch (e) {
+      const code = await diag.uploadFailure(req, { reason: 'decode failed', error: e, status: 400, file: req.file, jobId: j.id });
+      return res.status(400).json({ error: `That file is not a photo we can read. (code ${code})`, code });
+    }
     await pool.query(`INSERT INTO job_photos (job_id,kind,seq,file,width,height) VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (job_id,kind,seq) DO UPDATE SET file=EXCLUDED.file, width=EXCLUDED.width, height=EXCLUDED.height, taken_at=now()`, [j.id, kind, seq, name + '.jpg', info.width, info.height]);
     if (kind === 'before') await pool.query('UPDATE jobs SET orientation=$1 WHERE id=$2', [info.height >= info.width ? 'portrait' : 'landscape', j.id]);
@@ -244,8 +248,8 @@ function remove(el){
 function open(el){ cur=el; $('#menu').hidden=false; }
 $('#mX').onclick=function(){ $('#menu').hidden=true; };
 $('#mGal').onclick=function(){ $('#menu').hidden=true; $('#gal').value=''; $('#gal').click(); };
-$('#gal').onchange=function(){ if(this.files[0]) send(cur,this.files[0]); };
-$('#cap').onchange=function(){ if(this.files[0]) send(cur,this.files[0]); };
+$('#gal').onchange=function(){ if(this.files&&this.files[0]) send(cur,this.files[0]); else beacon({stage:'gallery-change-without-file'}); };
+$('#cap').onchange=function(){ if(this.files&&this.files[0]) send(cur,this.files[0]); else beacon({stage:'camera-change-without-file'}); };
 function native(){ $('#cap').value=''; $('#cap').click(); }
 $('#mCam').onclick=async function(){
   $('#menu').hidden=true; var el=cur;
@@ -266,8 +270,10 @@ async function shrink(f){
   try{ return await viaImg(f); }catch(e){}
   return f;   // the server converts HEIC and anything else it can read
 }
+function beacon(o){ try{ o.kind='capture-client'; o.ua=navigator.userAgent; o.ios=IOS; o.standalone=navigator.standalone===true; return fetch('/api/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o),credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){return j&&j.code;}).catch(function(){return '';}); }catch(e){ return Promise.resolve(''); } }
 async function send(el,file){
-  var k=el.dataset.kind, s=+el.dataset.seq; status(el,'Uploading…');
+  var k=el.dataset.kind, s=+el.dataset.seq, lastErr=''; status(el,'Uploading…');
+  if(!file){ beacon({stage:'no-file',slot:k+s}); status(el,'The phone gave no photo. Try again.',true); return; }
   var blob=await shrink(file);
   for(var i=0;i<4;i++){
     try{
@@ -277,10 +283,11 @@ async function send(el,file){
       var j=await r.json().catch(function(){return {};});
       if(r.ok){ CFG.version=Date.now(); if(!CFG.photos.some(function(p){return p.kind===k&&p.seq===s})) CFG.photos.push({kind:k,seq:s}); mark(k,s,url(k,s)); status(el,'Saved'); setTimeout(function(){ status(el,''); },1500); note(); return; }
       if(r.status>=400&&r.status<500){ status(el,j.error||'Could not save. Tap to retry.',true); return; }
-    }catch(e){}
+    }catch(e){ lastErr=(e&&e.name?e.name+': ':'')+(e&&e.message?e.message:String(e)); }
     status(el,'No signal. Retrying…',true); await new Promise(function(r){ setTimeout(r,1500*(i+1)); });
   }
-  status(el,'Not saved. Tap to try again.',true);
+  var c=await beacon({stage:'upload-failed',slot:k+s,error:lastErr,file:{name:file.name,type:file.type,size:file.size},sent:{type:blob.type,size:blob.size}});
+  status(el,'Not saved. Tap to try again.'+(c?' (code '+c+')':''),true);
 }
 note();
 })();`;

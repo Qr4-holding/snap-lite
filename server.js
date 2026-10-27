@@ -36,7 +36,7 @@ async function initDb(tries = 30) {
 }
 const events = (type, userId = null, jobId = null, detail = '') => pool.query('INSERT INTO events (type,user_id,job_id,detail) VALUES ($1,$2,$3,$4)', [type, userId, jobId, String(detail).slice(0, 80)]).catch(() => {});
 
-app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id, crew_can_capture: SKIN.crew_can_capture, crew_enabled: SKIN.crew_enabled }));
+app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id, crew_can_capture: SKIN.crew_can_capture, crew_enabled: SKIN.crew_enabled, commit: require('./lib/build').commit }));
 
 // ---------- the client's brand: logo, icons, manifest ----------
 app.get('/assets/logo.png', (req, res) => res.set('Cache-Control', 'public, max-age=3600').type('png').sendFile(SKIN.logoFile));
@@ -102,13 +102,14 @@ let mailMod;
 const acct = require('./accounts')({ app, pool, SKIN, ui, events, getMail: () => mailMod });
 mailMod = require('./mail')(secrets, SKIN, acct.TEST_DOMAIN);
 let shareMod;
-const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, getShare: () => shareMod });
+const diagMod = require('./diag')({ app, pool, SKIN, ui, acct });
+const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, diag: diagMod, getShare: () => shareMod });
 shareMod = require('./share')({ app, pool, SKIN, ui, acct, jobsMod, events });
 const linesMod = require('./lines')(SKIN, secrets);
 let voiceMod, renderMod;
 renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod });
 voiceMod = require('./voice')({ app, pool, SKIN, ui, acct, jobsMod, getRender: () => renderMod, events, secrets, linesMod });
-const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets, mailMod });
+const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets, mailMod, diagMod });
 
 app.use((req, res) => res.status(404).type('text/plain').send('Not found'));
 process.on('unhandledRejection', e => console.error('Unhandled:', e && e.message));
@@ -117,6 +118,7 @@ app.use((err, req, res, next) => { console.error(err); res.status(500).send('Som
 initDb()
   .then(() => adminMod.init())
   .then(() => acct.init())
+  .then(() => diagMod.init())
   .then(() => jobsMod.init())
   .then(() => shareMod.init())
   .then(() => renderMod.init())

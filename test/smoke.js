@@ -539,6 +539,52 @@ async function phaseReset() {
   ok('the reset page is not cached or indexed', /no-store/.test(pg.headers.get('cache-control') || ''));
 }
 
+async function phaseDiag() {
+  console.log('\n== Diagnostics (/check) ==');
+  if (!ADMIN_PW) { ok('ADMIN_PASSWORD supplied', false, 'set ADMIN_PASSWORD'); return; }
+  const e = `diag-${RUN}${TEST}`.toLowerCase(), pw = 'Owner-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'T', email: e, password: pw }) });
+  const owner = (await login(e, pw)).p;
+  const anon = await req(person(), 'GET', '/check');
+  ok('/check needs a sign-in', anon.status === 302 && /login/.test(anon.loc));
+  const pg = await req(owner, 'GET', '/check');
+  ok('/check opens for a signed-in person', pg.status === 200 && /Pick a photo/.test(pg.text) && /Take a photo/.test(pg.text));
+  ok('it has a plain image picker and a camera picker', /<input id="f1" type="file" accept="image\/\*"/.test(pg.text) && /id="f2" type="file" accept="image\/\*" capture="environment"/.test(pg.text) && !/id="f1"[^>]*capture/.test(pg.text));
+  ok('it shows the build version and commit', /"commit":"[0-9a-f]{4,}|"commit":"unknown"/.test(pg.text) && /"version":/.test(pg.text));
+  ok('/health reports the build commit', !!(await (await fetch(BASE + '/health')).json()).commit);
+  // the report endpoint
+  ok('a signed-out visitor cannot post a report', (await req(person(), 'POST', '/api/diag', { json: { kind: 'check' } })).status === 401);
+  const rep = await req(owner, 'POST', '/api/diag', { json: { kind: 'check', mode: 'pick', steps: [{ step: 'file', ok: true, detail: 'x' }], env: { ios: '17.4' } } });
+  const code = rep.json().code;
+  ok('a report gets a 4-character code', rep.status === 200 && /^[A-HJ-NP-Z2-9]{4}$/.test(code || ''), rep.text.slice(0, 80));
+  const got = (await req(admin(), 'GET', '/admin/diag?code=' + code)).json();
+  ok('the code finds the full report in /admin/diag', Array.isArray(got) && got.length === 1 && got[0].data.env.ios === '17.4' && got[0].kind === 'check');
+  ok('the admin log needs the admin password', (await req(person(), 'GET', '/admin/diag')).status === 401);
+  // the server side of the check: a real HEIC, a JPEG, and rubbish
+  const up = async (buf, name, type) => { const fd = new FormData(); fd.append('file', new Blob([buf], { type }), name); const r = await fetch(`${BASE}/api/diag/upload`, { method: 'POST', body: fd, headers: { cookie: owner.cookie } }); return { status: r.status, j: await r.json().catch(() => ({})) }; };
+  const heic = fs.readFileSync(path.join(__dirname, 'fixtures', 'sample.heic'));
+  const u1 = await up(heic, 'photo.jpg', ''); 
+  ok('a HEIC file with a blank type is read and reported as heic', u1.status === 200 && u1.j.ok && u1.j.detected.type === 'heic' && u1.j.converted_with === 'heic-convert', JSON.stringify(u1.j));
+  const u2 = await up(await jpeg(1200, 900), 'photo.jpg', 'image/jpeg');
+  ok('a JPEG is read and reported as jpeg', u2.status === 200 && u2.j.detected.type === 'jpeg' && u2.j.width > 0);
+  const u3 = await up(Buffer.from('definitely not a photo, just text'), 'x.jpg', 'application/octet-stream');
+  ok('rubbish gets a refusal with a code', u3.status === 400 && /^[A-Z0-9]{4}$/.test(u3.j.code || ''), JSON.stringify(u3.j));
+  // the real upload route logs failures with a code, and no longer trusts the type label
+  const jid = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, headers: { accept: 'application/json' } })).json().id;
+  const blank = await upload(owner, jid, 'before', 0, heic, 'photo.jpg', '');
+  ok('a HEIC photo whose type label is blank is now accepted', blank.status === 200 && blank.body.ok, JSON.stringify(blank.body));
+  const octet = await upload(owner, jid, 'after', 0, await jpeg(900, 1200), 'photo.jpg', 'application/octet-stream');
+  ok('a photo labelled application/octet-stream is accepted', octet.status === 200 && octet.body.ok, JSON.stringify(octet.body));
+  const bad = await upload(owner, jid, 'during', 0, Buffer.from('not an image'), 'photo.jpg', 'image/jpeg');
+  const bcode = (bad.body.error || '').match(/code ([A-Z0-9]{4})/);
+  ok('a failed upload tells the person a code', bad.status === 400 && !!bcode && bad.body.code === bcode[1], JSON.stringify(bad.body));
+  const log = (await req(admin(), 'GET', '/admin/diag?code=' + (bad.body.code || 'ZZZZ'))).json()[0] || {};
+  ok('the server log holds the user agent, size, detected type and error', log.kind === 'upload_failure' && !!log.ua && log.data.size === 12 && log.data.detected && log.data.detected.type === 'unknown' && !!log.data.error && log.data.reason === 'decode failed', JSON.stringify(log).slice(0, 200));
+  const nofile = await req(owner, 'POST', `/api/jobs/${jid}/photos`, { body: form({ kind: 'before', seq: '0' }) });
+  ok('a request with no file is logged with a code too', nofile.status === 400 && /code [A-Z0-9]{4}/.test(nofile.json().error || ''), nofile.text.slice(0, 120));
+  ok('the capture screen sends a report when an upload cannot be saved', /beacon\(\{stage:'upload-failed'/.test((await req(owner, 'GET', `/jobs/${jid}/capture`)).text));
+}
+
 async function engine() {
   console.log('\n== Engine timing (local, no server) ==');
   const r = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'engine_timing.py')], { encoding: 'utf8' });
@@ -561,6 +607,7 @@ async function engine() {
     if (['phase5', 'all'].includes(which)) await phase5();
     if (['phase6', 'all'].includes(which)) await phase6();
     if (['reset', 'all'].includes(which)) await phaseReset();
+    if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }

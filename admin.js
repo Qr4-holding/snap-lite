@@ -7,7 +7,7 @@ const { clean, esc, hashPw, sameOrigin } = require('./lib/util');
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/backups';
 
-module.exports = function admin({ app, pool, SKIN, acct, jobsMod, secrets, mailMod }) {
+module.exports = function admin({ app, pool, SKIN, acct, jobsMod, secrets, mailMod, diagMod }) {
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   let ADMIN_USER = process.env.ADMIN_USER || 'admin';
   const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -79,6 +79,11 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     if (!r.rowCount) return res.status(404).json({ error: 'No such owner.' });
     await pool.query('DELETE FROM biz_sessions WHERE user_id IN (SELECT id FROM users WHERE email=$1)', [email]);
     res.json({ ok: true });
+  } catch (e) { next(e); } });
+
+  // what phones reported: /admin/diag (latest) or /admin/diag?code=ABCD
+  app.get('/admin/diag', auth, async (req, res, next) => { try {
+    res.set('Cache-Control', 'no-store').json(await diagMod.recent(req.query.code));
   } catch (e) { next(e); } });
 
   // test helpers: only ever about @snaplite-test.invalid addresses
