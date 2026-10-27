@@ -52,6 +52,9 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     if (user.role === 'owner' || j.user_id === user.id || j.state === 'shared') return j;
     return null;
   }
+  // photos can be changed at every stage except while the video is being made. A live video stays as it is until Done remakes it.
+  const canChange = (user, j) => j && j.state !== 'rendering' && (user.role === 'owner' || (j.user_id === user.id && ['draft', 'failed', 'ready'].includes(j.state)));
+  const isLive = j => ['ready', 'approved', 'shared'].includes(j.state);
   const canEdit = (user, j) => j && (user.role === 'owner' || j.user_id === user.id) && ['draft', 'failed'].includes(j.state);
   const photosOf = async id => (await pool.query('SELECT kind,seq,width,height,taken_at FROM job_photos WHERE job_id=$1 ORDER BY CASE kind WHEN \'before\' THEN 0 WHEN \'during\' THEN 1 ELSE 2 END, seq', [id])).rows;
   const dirOf = id => path.join(JOBS_DIR, String(id));
@@ -82,7 +85,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     req.body = req.body || {};
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
-    if (!canEdit(req.user, j)) return res.status(409).json({ error: 'This job has already been made into a video, so its photos can no longer be changed.' });
+    if (!canChange(req.user, j)) return res.status(409).json({ error: j.state === 'rendering' ? 'The video is being made. Wait until it has finished, then change the photos.' : 'Only the owner can change the photos of a video that is ready.' });
     const kind = ['before', 'during', 'after'].includes(req.body.kind) ? req.body.kind : '';
     const seq = kind === 'during' ? parseInt(req.body.seq, 10) : 0;
     if (!kind || !req.file || !(seq >= 0) || (kind === 'during' && seq >= SKIN.max_during) || (kind !== 'during' && seq !== 0)) {
@@ -119,7 +122,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   // remove one photo from a draft (the capture screen's Remove button)
   app.delete('/api/jobs/:id/photos/:kind/:seq', sameOrigin, needUser({ json: true }), capOk, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
-    if (!j || !canEdit(req.user, j)) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
+    if (!j || !canChange(req.user, j)) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
     const { kind, seq } = req.params;
     if (!['before', 'during', 'after'].includes(kind) || !/^\d$/.test(seq)) return res.status(404).json({ error: 'Photo not found.' });
     await pool.query('DELETE FROM job_photos WHERE job_id=$1 AND kind=$2 AND seq=$3', [j.id, kind, +seq]);
@@ -249,18 +252,20 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'own
   app.get('/jobs/:id/capture', needUser(), capOk, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.redirect(303, '/');
-    if (!canEdit(req.user, j)) return res.redirect(303, `/jobs/${j.id}`);
+    if (!canChange(req.user, j)) return res.redirect(303, `/jobs/${j.id}`);
+    const change = isLive(j), shared = ['approved', 'shared'].includes(j.state);
     const photos = await photosOf(j.id);
     const CFG = { id: j.id, maxDuring: SKIN.max_during, photos: photos.map(p => ({ kind: p.kind, seq: p.seq })), version: Date.now() };
     const slot = (kind, seq, label, cls) => `<div class="shot ${cls}" data-kind="${kind}" data-seq="${seq}" role="button" tabindex="0" aria-label="${label} photo"><span class="tag">${label}</span><span class="hint">Tap to add</span><span class="st" hidden></span><span class="acts"><button type="button" class="small sec retake">Retake</button><button type="button" class="small bad remove">Remove</button></span></div>`;
     const slots = slot('before', 0, 'BEFORE', 'before') + Array.from({ length: SKIN.max_during }, (_, i) => slot('during', i, SKIN.max_during > 1 ? `DURING ${i + 1}` : 'DURING', 'during') ).join('') + slot('after', 0, 'AFTER', 'after');
     res.set('Cache-Control', 'no-store').send(page('Photos', `
 <h1>${esc(j.job_type || 'Job')}</h1>
+${shared ? '<p class="msg">Copies you\'ve already shared stay as they are.</p>' : ''}${change ? '<p class="msg">Retake or remove photos, then tap Done. The video is remade with your current lines and voice' + (shared ? ' and goes back to Needs approval.' : '.') + '</p>' : ''}
 <p class="small">Take the BEFORE photo first. For AFTER, stand in the same spot: a faint outline of the before photo helps you line it up. During photos are optional. Each photo saves as you take it.</p>
 <div class="shots" id="shots">${slots}</div>
 <p id="note" class="small"></p>
 <div id="cmp" style="display:none;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px"><div><div class="small">BEFORE</div><img id="cb" alt="Before" style="width:100%;border-radius:10px"></div><div><div class="small">AFTER</div><img id="ca" alt="After" style="width:100%;border-radius:10px"></div></div>
-<div style="display:grid;gap:10px;margin-top:14px"><a class="btn" id="done" href="/jobs/${j.id}/voice" aria-disabled="true">Done: save job</a></div>
+<div style="display:grid;gap:10px;margin-top:14px">${change ? `<form method="post" action="/jobs/${j.id}/remake" style="display:grid"><button class="btn" id="done" type="submit" aria-disabled="true">Done: remake the video</button></form><a class="btn sec" href="/jobs/${j.id}">Cancel: keep the video as it is</a>` : `<a class="btn" id="done" href="/jobs/${j.id}/voice" aria-disabled="true">Done: save job</a>`}</div>
 <input type="file" id="gal" accept="image/*" hidden>
 <input type="file" id="cap" accept="image/*" capture="environment" hidden>
 <div id="menu" class="cam" hidden style="grid-template-rows:1fr auto;background:rgba(0,0,0,.6)"><div></div><div class="bar" style="flex-direction:column;background:#fff;padding:16px;border-radius:18px 18px 0 0"><button id="mCam">Take photo</button><button class="sec" id="mGal">Choose from gallery</button><button class="sec" id="mX">Cancel</button></div></div>
@@ -363,12 +368,13 @@ ${sh ? sh.html : ''}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:12px">
 ${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<a class="btn" href="/jobs/${j.id}/voice">${j.state === 'failed' ? 'Try again' : 'Choose voice and make video'}</a>` : ''}
-${canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Add or retake photos</a>` : ''}
+${canChange(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Change photos</a>` : ''}
 ${owner || canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/edit">Edit details</a>` : ''}
 ${mine && j.state === 'ready' ? `<a class="btn sec" href="/jobs/${j.id}/voice">Change voice or lines</a>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
 ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
-<a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll + (sh ? sh.script : '') + `var fs=document.getElementById('fs'),v=document.getElementById('vid');if(fs&&v)fs.addEventListener('click',function(){var f=v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen;if(f)f.call(v);});` }));
+<a class="btn sec" href="/">Back to jobs</a></div>
+${owner ? '<p style="color:var(--bad);font-weight:700;margin:14px 0 0">Made a mistake you can\'t fix here? Delete the job and start again.</p>' : ''}`, { user: u, script: poll + (sh ? sh.script : '') + `var fs=document.getElementById('fs'),v=document.getElementById('vid');if(fs&&v)fs.addEventListener('click',function(){var f=v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen;if(f)f.call(v);});` }));
   } catch (e) { next(e); } });
 
   return { init, getJob, removeJob, dirOf, STATES, hubFields };

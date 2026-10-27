@@ -533,6 +533,7 @@ async function phase6() {
     await req(who, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'EKP11. Skip the skip.' }) });
     for (let i = 0; i < 120; i += 3) { const st = (await req(who, 'GET', `/api/jobs/${id}/status`)).json(); if (st.state !== 'rendering') break; await new Promise(r => setTimeout(r, 3000)); } return id; };
   const id = await mk(owner);
+  const cid0 = await mk(owner);
   const pre = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
   ok('no link can be made before approval', pre.status === 409);
   ok('a not-yet-approved job has no share buttons', !/id="b-share"/.test((await req(owner, 'GET', `/jobs/${id}`)).text));
@@ -586,6 +587,39 @@ async function phase6() {
   if (CREW_ON) ok('crew sees the shared video and Save to phone but no Share or Copy buttons', /Save to phone/.test(ct) && !/id="b-share"/.test(ct) && !/Copy link/.test(ct));
   const cid = CREW_CAP ? await mk(crew) : await mk(owner);
   if (CREW_ON) ok('crew cannot approve or share a job', (await req(crew, 'POST', `/api/jobs/${cid}/approve`, { json: {}, ...A })).status === 403 && (await req(crew, 'POST', `/api/jobs/${cid}/shared`, { json: {}, ...A })).status === 403);
+  // ---- Change photos at every stage ----
+  { const cp = (await req(owner, 'GET', `/jobs/${id}/capture`)).text, jp = (await req(owner, 'GET', `/jobs/${id}`)).text;
+    ok('a shared job has Change photos and the red delete note on its page', />Change photos</.test(jp) && /Made a mistake you can't fix here\? Delete the job and start again\./.test(jp) && /color:var\(--bad\)/.test(jp));
+    ok('the photo screen of a shared job says shared copies stay as they are and offers a remake', /Copies you've already shared stay as they are\./.test(cp) && new RegExp(`action="/jobs/${id}/remake"`).test(cp) && /Done: remake the video/.test(cp));
+    ok('crew cannot change the photos of an approved or shared video', !CREW_ON || (await upload(crew, id, 'after', 0, await jpeg(1200, 1600, { shade: 80 }))).status >= 400);
+    const st0 = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().state;
+    const re = await upload(owner, id, 'after', 0, await jpeg(1200, 1600, { shade: 90 }));
+    ok('a shared job takes a retaken photo, and stays Shared until Done', re.status === 200 && st0 === 'shared' && (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().state === 'shared');
+    ok('a photo can be removed from a shared job', (await req(owner, 'DELETE', `/api/jobs/${id}/photos/after/0`)).status === 200);
+    const no = await req(owner, 'POST', `/jobs/${id}/remake`, { body: '' });
+    ok('Done without an AFTER photo does not remake anything', no.status === 303 && /m=err/.test(no.loc) && (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().state === 'shared');
+    await upload(owner, id, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
+    const rm = await req(owner, 'POST', `/jobs/${id}/remake`, { body: '' });
+    const mid = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json();
+    ok('Done remakes the video: the shared job is now being made', rm.status === 303 && mid.state === 'rendering', rm.status + ' ' + mid.state);
+    ok('photos are locked while the video is being made', (await upload(owner, id, 'after', 0, await jpeg(1200, 1600, { shade: 20 }))).status === 409);
+    ok('a remake cannot be started twice', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 409);
+    ok('the old link stops working while it is remade', (await fetch(BASE + path_)).status === 404);
+    for (let i = 0; i < 120; i += 3) { const s = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') break; await new Promise(r => setTimeout(r, 3000)); }
+    ok('the remade video goes back to Needs approval', (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().state === 'ready');
+    ok('the old link stays dead until it is approved again', (await fetch(BASE + path_)).status === 404);
+    ok('owner approves the remade video, and the link works again with the new video', (await req(owner, 'POST', `/api/jobs/${id}/approve`, { json: {}, ...A })).status === 200 && (await fetch(BASE + path_)).status === 200);
+    // a ready (Needs approval) job: change photos works, no "shared copies" line
+    const rc = (await req(owner, 'GET', `/jobs/${cid0}/capture`)).text;
+    ok('a Needs approval job offers the remake screen without the shared-copies line', new RegExp(`action="/jobs/${cid0}/remake"`).test(rc) && !/Copies you've already shared/.test(rc));
+    const ra = await upload(owner, cid0, 'after', 0, await jpeg(1200, 1600, { shade: 60 }));
+    const rr = await req(owner, 'POST', `/jobs/${cid0}/remake`, { body: '' });
+    ok('a Needs approval job remakes and stays awaiting approval', ra.status === 200 && rr.status === 303 && ['rendering', 'ready'].includes((await req(owner, 'GET', `/api/jobs/${cid0}/status`)).json().state));
+    // a draft keeps the original flow
+    const dj = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+    const dc = (await req(owner, 'GET', `/jobs/${dj}/capture`)).text;
+    ok('a draft keeps the normal Done: save job flow', new RegExp(`href="/jobs/${dj}/voice"`).test(dc) && !/Copies you've already shared/.test(dc) && !/remake/.test(dc));
+    await req(owner, 'DELETE', `/api/jobs/${dj}`); await req(owner, 'DELETE', `/api/jobs/${cid0}`); }
   await req(owner, 'DELETE', `/api/jobs/${id}`);
   ok('deleting the job kills its link', (await fetch(BASE + path_)).status === 404);
 }

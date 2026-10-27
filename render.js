@@ -10,7 +10,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   const queue = []; let busy = false;
   const ENGINE = path.join(__dirname, 'video', 'engine.py');
 
-  const canRender = (u, j) => j && (u.role === 'owner' || j.user_id === u.id) && ['draft', 'failed', 'ready'].includes(j.state);
+  const canRender = (u, j, change) => j && (u.role === 'owner' || j.user_id === u.id) && (change ? (u.role === 'owner' ? ['draft', 'failed', 'ready', 'approved', 'shared'] : ['draft', 'failed', 'ready']) : ['draft', 'failed', 'ready']).includes(j.state);
 
   async function buildConfig(j) {
     const dir = jobsMod.dirOf(j.id);
@@ -66,14 +66,14 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   }
   const enqueue = id => { if (!queue.includes(id)) queue.push(id); pump(); };
 
-  async function start(user, id) {
+  async function start(user, id, change) {
     const j = await jobsMod.getJob(user, id);
     if (!j) return { code: 404, error: "We can't find that job. Go back to Jobs and try again." };
-    if (!canRender(user, j)) return { code: 409, error: 'This video is being made or is already approved, so it cannot be remade now.' };
+    if (!canRender(user, j, change)) return { code: 409, error: 'This video is being made or is already approved, so it cannot be remade now.' };
     const ph = (await pool.query('SELECT kind FROM job_photos WHERE job_id=$1', [j.id])).rows.map(p => p.kind);
     if (!ph.includes('before') || !ph.includes('after')) return { code: 400, error: 'Add a BEFORE and an AFTER photo first.' };
     await pool.query("UPDATE jobs SET state='rendering', render_error=NULL WHERE id=$1", [j.id]);
-    events('render_start', user.id, j.id); enqueue(j.id);
+    events(change ? 'photos_changed_remake' : 'render_start', user.id, j.id, change ? j.state : ''); enqueue(j.id);
     return { code: 200, state: 'rendering' };
   }
 
@@ -83,6 +83,16 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   } catch (e) { next(e); } });
   app.post('/jobs/:id/render', sameOrigin, needUser(), async (req, res, next) => { try {
     await start(req.user, req.params.id); res.redirect(303, `/jobs/${req.params.id}`);
+  } catch (e) { next(e); } });
+
+  // Done on the photo screen of a video that already exists: remake with the current lines and voice. A live video goes back to Needs approval.
+  app.post('/jobs/:id/remake', sameOrigin, needUser(), async (req, res, next) => { try {
+    const r = await start(req.user, req.params.id, true);
+    res.redirect(303, r.code === 200 ? `/jobs/${req.params.id}` : `/jobs/${req.params.id}${r.code === 404 ? '' : '?m=err'}`);
+  } catch (e) { next(e); } });
+  app.post('/api/jobs/:id/remake', sameOrigin, needUser({ json: true }), async (req, res, next) => { try {
+    const r = await start(req.user, req.params.id, true);
+    res.status(r.code).json(r.error ? { error: r.error } : { ok: true, state: r.state });
   } catch (e) { next(e); } });
 
   const sendMedia = (name, type) => async (req, res, next) => { try {
