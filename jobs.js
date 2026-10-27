@@ -176,7 +176,8 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   app.post('/api/jobs/:id/delete', sameOrigin, needUser({ json: true }), needOwner, async (req, res, next) => { try {
     res.status(await removeJob(req.user, req.params.id) ? 200 : 404).json({ ok: true });
   } catch (e) { next(e); } });
-  app.post('/jobs/:id/delete', sameOrigin, needUser(), needOwner, async (req, res, next) => { try {
+  app.post('/jobs/:id/delete', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
+    if (req.body && req.body.list) { const jj = await getJob(req.user, req.params.id); if (jj && !['draft', 'failed'].includes(jj.state)) return res.redirect(303, `/jobs/${jj.id}`); }
     await removeJob(req.user, req.params.id); res.redirect(303, '/?m=deleted');
   } catch (e) { next(e); } });
   app.post('/jobs/:id/approve', sameOrigin, needUser(), needOwner, async (req, res, next) => { try {
@@ -187,7 +188,9 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
 
   // ---------- screens ----------
   const LABEL = { draft: 'Draft', rendering: 'Making video…', ready: 'Needs approval', approved: 'Ready to share', shared: 'Shared', failed: 'Failed' };
-  const jobCard = (r, mine) => `<a class="job" href="/jobs/${r.id}"><div class="th" style="background-image:url('${r.cover ? `/api/jobs/${r.id}/cover` : `/api/jobs/${r.id}/photos/${r.has_after ? 'after' : 'before'}/0?t=1`}')"></div><div><b>${esc(r.job_type || 'Job')}</b>${r.area ? `<span class="small">${esc(r.area)}</span>` : ''}<span class="small">${new Date(r.created_at).toLocaleDateString('en-GB')}${mine ? '' : ' · by crew'}</span><br><span class="pill${['approved', 'ready'].includes(r.state) ? ' on' : ''}">${LABEL[r.state]}</span></div></a>`;
+  // Delete is offered on Failed and Draft cards only (owner only). Live videos are deleted from the job page, never from a card.
+  const cardDelete = r => `<details class="del"><summary class="btn sec small">Delete</summary><form method="post" action="/jobs/${r.id}/delete"><input type="hidden" name="list" value="1"><p class="msg bad" role="alert" style="margin:8px 0">Are you sure? This removes the photos too.</p><div style="display:flex;gap:8px"><button class="bad small" type="submit">Yes, delete</button><button class="sec small" type="button" onclick="this.closest('details').open=false">Keep it</button></div></form></details>`;
+  const jobCard = (r, mine, canDel) => `<div class="jobwrap"><a class="job" href="/jobs/${r.id}"><div class="th" style="background-image:url('${r.cover ? `/api/jobs/${r.id}/cover` : `/api/jobs/${r.id}/photos/${r.has_after ? 'after' : 'before'}/0?t=1`}')"></div><div><b>${esc(r.job_type || 'Job')}</b><span class="small">${[r.area ? esc(r.area) : '', new Date(r.created_at).toLocaleDateString('en-GB'), mine ? '' : 'by crew'].filter(Boolean).join(' · ')}</span><br><span class="pill${['approved', 'ready'].includes(r.state) ? ' on' : ''}">${LABEL[r.state]}</span></div></a>${canDel && ['draft', 'failed'].includes(r.state) ? cardDelete(r) : ''}</div>`;
 
   app.get('/', needUser(), async (req, res, next) => { try {
     const u = req.user, rows = await visibleJobs(u);
@@ -195,7 +198,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
       const have = (await pool.query(`SELECT job_id, bool_or(kind='after') a, bool_or(kind='before') b FROM job_photos WHERE job_id = ANY($1) GROUP BY job_id`, [rows.map(r => r.id)])).rows;
       const m = new Map(have.map(h => [h.job_id, h])); rows.forEach(r => { const h = m.get(r.id) || {}; r.has_after = !!h.a; });
     }
-    const group = (title, states) => { const list = rows.filter(r => states.includes(r.state)); return list.length ? `<h2>${title} <span class="small">(${list.length})</span></h2><div class="jobs">${list.map(r => jobCard(r, r.user_id === u.id)).join('')}</div>` : ''; };
+    const group = (title, states) => { const list = rows.filter(r => states.includes(r.state)); return list.length ? `<h2>${title} <span class="small">(${list.length})</span></h2><div class="jobs">${list.map(r => jobCard(r, r.user_id === u.id, u.role === 'owner')).join('')}</div>` : ''; };
     const flash = { deleted: 'Job deleted.' }[req.query.m] || '';
     res.set('Cache-Control', 'no-store').send(page('Jobs', `
 ${msg(flash)}${u.role === 'owner' || SKIN.crew_can_capture ? '<a class="btn" href="/new" style="min-height:72px;font-size:22px">＋ New job</a>' : ''}

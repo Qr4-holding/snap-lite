@@ -140,6 +140,27 @@ async function phaseLines() {
   const ek = run('ekp11', ['x']);
   ok('[ekp11] standard line 3 still names the business', /EKP11/.test(ek.t[2]), ek.t[2]);
 }
+async function phaseHomeDelete() {
+  console.log('\n== Home list: delete on Draft cards, date separator ==');
+  if (!ADMIN_PW) return;
+  const A = { headers: { accept: 'application/json' } };
+  const email = `home-${RUN}${TEST}`, pw = 'Home-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Home Test', email, password: pw }) });
+  const who = (await login(email, pw)).p;
+  const id = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden', area: 'Manchester' }, ...A })).json().id;
+  const home = (await req(who, 'GET', '/')).text;
+  ok('the town and the date are separated by a dot', /Manchester · \d\d\/\d\d\/\d{4}/.test(home) && !/Manchester\d/.test(home), (home.match(/Manchester[^<]{0,20}/) || [])[0]);
+  const card = home.slice(home.indexOf(`/jobs/${id}/delete`) - 200, home.indexOf(`/jobs/${id}/delete`) + 700);
+  ok('a Draft card has Delete with the confirmation on the page itself', new RegExp(`/jobs/${id}/delete`).test(home) && /Are you sure\? This removes the photos too\./.test(card) && /Yes, delete/.test(card) && /Keep it/.test(card));
+  ok('the card delete is not a browser pop-up', !/confirm\(/.test(card), card.slice(0, 120));
+  const del = await req(who, 'POST', `/jobs/${id}/delete`, { body: form({ list: '1' }) });
+  ok('Yes, delete removes the draft', del.status === 303 && /m=deleted/.test(del.loc) && (await req(who, 'GET', `/api/jobs/${id}/status`)).status === 404, del.status + ' ' + del.loc);
+  if (CREW_ON) {
+    const inv = await req(who, 'POST', '/settings/invite', { body: form({ email: `crewh-${RUN}${TEST}` }) });
+    const crew = (await login(`crewh-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p;
+    if (CREW_CAP) { const cid = (await req(crew, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id; ok('crew do not get a Delete button', !/\/delete/.test((await req(crew, 'GET', '/')).text)); }
+  }
+}
 async function phaseErrors() {
   console.log('\n== Plain-words errors ==');
   const E = require('../lib/errors'), BAD = /server|key\b|api|elevenlabs|status|\b[45]\d\d\b|undefined|\[object/i;
@@ -513,7 +534,13 @@ async function phase6() {
   const pre = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
   ok('no link can be made before approval', pre.status === 409);
   ok('a not-yet-approved job has no share buttons', !/id="b-share"/.test((await req(owner, 'GET', `/jobs/${id}`)).text));
+  { const home = (await req(owner, 'GET', '/')).text, nx = await req(owner, 'POST', `/jobs/${id}/delete`, { body: form({ list: '1' }) });
+    ok('a Needs approval card has no Delete button', !new RegExp(`/jobs/${id}/delete`).test(home));
+    ok('a delete sent from the list is refused for a live video', nx.status === 303 && new RegExp(`/jobs/${id}$`).test(nx.loc) && (await req(owner, 'GET', `/api/jobs/${id}/status`)).status === 200, nx.status + ' ' + nx.loc);
+    ok('the job page still has its own Delete job', new RegExp(`/jobs/${id}/delete`).test((await req(owner, 'GET', `/jobs/${id}`)).text)); }
   ok('owner approves', (await req(owner, 'POST', `/api/jobs/${id}/approve`, { json: {}, ...A })).status === 200);
+  { const home = (await req(owner, 'GET', '/')).text, nx = await req(owner, 'POST', `/jobs/${id}/delete`, { body: form({ list: '1' }) });
+    ok('a Ready to share card has no Delete button and a list delete is refused', !new RegExp(`/jobs/${id}/delete`).test(home) && nx.status === 303 && new RegExp(`/jobs/${id}$`).test(nx.loc)); }
   const page = (await req(owner, 'GET', `/jobs/${id}`)).text;
   ok('approved job shows Share video, link buttons, Save to phone and Copy link', /id="b-share"/.test(page) && /Save to phone/.test(page) && /Copy link/.test(page) && /id="b-wa"/.test(page) && /id="b-fb"/.test(page) && /navigator\.canShare/.test(page));
   const dl = await fetch(`${BASE}/api/jobs/${id}/video?dl=1`, { headers: { cookie: owner.cookie } });
@@ -733,6 +760,7 @@ async function engine() {
     if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['help', 'all'].includes(which)) await phaseHelp();
     if (['errors', 'all'].includes(which)) await phaseErrors();
+    if (['homedelete', 'all'].includes(which)) await phaseHomeDelete();
     if (['lines', 'all'].includes(which)) await phaseLines();
     if (['area', 'all'].includes(which)) await phaseArea();
     if (['adminback', 'all'].includes(which)) await phaseAdminBack();
