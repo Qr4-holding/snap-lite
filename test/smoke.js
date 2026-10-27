@@ -556,7 +556,7 @@ async function phase6() {
     const bad = await req(owner, 'POST', `/api/jobs/${id}/details`, { json: { job_type: 'Not a real type', area: 'Leeds' }, ...A });
     ok('an unknown job type is ignored, the town still saves', bad.status === 200 && (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().job_type === 'Garage' && (await req(owner, 'GET', `/api/jobs/${id}/status`)).json().area === 'Leeds');
     ok('the home list shows the new town', /Leeds/.test((await req(owner, 'GET', '/')).text));
-    if (CREW_ON) ok('crew cannot change the details of an approved job', (await req(crew, 'POST', `/api/jobs/${id}/details`, { json: { job_type: 'Garage', area: 'X' }, ...A })).status >= 403 || true); }
+    if (CREW_ON) ok('crew cannot change the details of an approved job', (await req(crew, 'POST', `/api/jobs/${id}/details`, { json: { job_type: 'Garage', area: 'X' }, ...A })).status >= 403); }
   const dl = await fetch(`${BASE}/api/jobs/${id}/video?dl=1`, { headers: { cookie: owner.cookie } });
   ok('Save to phone downloads the mp4', dl.status === 200 && /attachment/.test(dl.headers.get('content-disposition') || '') && /video\/mp4/.test(dl.headers.get('content-type')));
   const lk = await req(owner, 'POST', `/api/jobs/${id}/link`, { json: {}, ...A });
