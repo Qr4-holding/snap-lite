@@ -87,6 +87,29 @@ async function phaseAdminBack() {
   const r2 = await req(admin(), 'POST', '/admin/keys', { body: form({}) });
   ok('plain Save keys stays on the admin page', r2.status === 303 && /\/admin\?m=keys$/.test(r2.loc), r2.loc);
 }
+async function phaseArea() {
+  console.log('\n== Town or area ==');
+  if (!ADMIN_PW) return;
+  const A = { headers: { accept: 'application/json' } };
+  const email = `area-${RUN}${TEST}`, pw = 'Area-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Area Test', email, password: pw }) });
+  const lg = await login(email, pw); const who = { cookie: lg.p.cookie };
+  const nj = (await req(who, 'GET', '/new')).text;
+  ok('New job asks for the town or area, under the job type, empty the first time', /Town or area \(where the job was\)<input name="area"[^>]*value=""/.test(nj) && nj.indexOf('name="job_type"') < nj.indexOf('name="area"'));
+  const AREA = 'Zzyzx Quarry <b>x</b>';
+  const id = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden', area: AREA }, ...A })).json().id;
+  const st = (await req(who, 'GET', `/api/jobs/${id}/status`)).json();
+  ok('the area is stored on the job, with angle brackets removed', /^Zzyzx Quarry/.test(st.area) && !/[<>]/.test(st.area), st.area);
+  ok('the next New job offers the last area as the default', new RegExp('name="area"[^>]*value="' + st.area.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"').test((await req(who, 'GET', '/new')).text));
+  const long = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden', area: 'A'.repeat(300) }, ...A })).json().id;
+  ok('a very long area is cut to 80 characters', (await req(who, 'GET', `/api/jobs/${long}/status`)).json().area.length === 80);
+  const pg = (await req(who, 'GET', `/jobs/${id}`)).text, home = (await req(who, 'GET', '/')).text;
+  ok('the job page and the job list show the area, escaped', /📍 Zzyzx Quarry/.test(pg) && /Zzyzx Quarry/.test(home) && !/<b>x<\/b>/.test(pg + home));
+  const vs = (await req(who, 'GET', `/jobs/${id}/voice`)).text;
+  ok('the area is not on the voice and lines screen', !/Zzyzx/.test(vs));
+  const none = (await req(who, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+  ok('a job with no area stores an empty area', (await req(who, 'GET', `/api/jobs/${none}/status`)).json().area === '');
+}
 async function phaseErrors() {
   console.log('\n== Plain-words errors ==');
   const E = require('../lib/errors'), BAD = /server|key\b|api|elevenlabs|status|\b[45]\d\d\b|undefined|\[object/i;
@@ -680,6 +703,7 @@ async function engine() {
     if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['help', 'all'].includes(which)) await phaseHelp();
     if (['errors', 'all'].includes(which)) await phaseErrors();
+    if (['area', 'all'].includes(which)) await phaseArea();
     if (['adminback', 'all'].includes(which)) await phaseAdminBack();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }

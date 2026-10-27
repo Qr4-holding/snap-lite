@@ -38,6 +38,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     await pool.query(`CREATE TABLE IF NOT EXISTS job_photos (
       id SERIAL PRIMARY KEY, job_id INT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('before','during','after')),
       seq INT NOT NULL DEFAULT 0, file TEXT NOT NULL, width INT, height INT, taken_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (job_id, kind, seq))`);
+    await pool.query("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS area TEXT NOT NULL DEFAULT ''");
     await pool.query('CREATE INDEX IF NOT EXISTS jobs_biz_state ON jobs (biz_id, state, created_at DESC)');
     await pool.query(`CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY, user_id INT NOT NULL, platform TEXT, push_subscription JSONB, app_version TEXT, last_seen TIMESTAMPTZ DEFAULT now())`);
@@ -54,13 +55,18 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   const canEdit = (user, j) => j && (user.role === 'owner' || j.user_id === user.id) && ['draft', 'failed'].includes(j.state);
   const photosOf = async id => (await pool.query('SELECT kind,seq,width,height,taken_at FROM job_photos WHERE job_id=$1 ORDER BY CASE kind WHEN \'before\' THEN 0 WHEN \'during\' THEN 1 ELSE 2 END, seq', [id])).rows;
   const dirOf = id => path.join(JOBS_DIR, String(id));
+  // where the job was: free text for the list, the job page and the hub only. It is never spoken, never on the end card and never given to the lines.
+  const cleanArea = v => clean(String(v || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' '), 80);
+  const hubFields = j => ({ slug: j.slug, job_type: j.job_type, area: j.area || '', created_at: j.created_at });   // what the hub post will carry
   const newSlug = () => crypto.randomBytes(6).toString('hex');
 
   // ---------- create a job ----------
   app.post('/api/jobs', sameOrigin, needUser({ json: true }), capOk, express.json({ limit: '5kb' }), form, async (req, res, next) => { try {
     const b = req.body || {}, type = clean(b.job_type, 60);
     const job_type = SKIN.job_types.includes(type) ? type : (SKIN.job_types[0] || '');
-    const j = (await pool.query('INSERT INTO jobs (slug,biz_id,user_id,job_type) VALUES ($1,$2,$3,$4) RETURNING id', [newSlug(), req.user.biz_id, req.user.id, job_type])).rows[0];
+    const area = cleanArea(b.area);
+    const j = (await pool.query('INSERT INTO jobs (slug,biz_id,user_id,job_type,area) VALUES ($1,$2,$3,$4,$5) RETURNING id', [newSlug(), req.user.biz_id, req.user.id, job_type, area])).rows[0];
+    await pool.query('INSERT INTO settings (key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', ['lastarea:' + req.user.id, area]).catch(() => {});
     events('job_created', req.user.id, j.id);
     if (/json/.test(req.get('accept') || '') && !/html/.test(req.get('accept') || '')) return res.status(201).json({ id: j.id });
     res.redirect(303, `/jobs/${j.id}/capture`);
@@ -125,11 +131,11 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   app.get('/api/jobs/:id/status', needUser({ json: true }), async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
     if (!j) return res.status(404).json({ error: "We can't find that job. Go back to Jobs and try again." });
-    res.set('Cache-Control', 'no-store').json({ id: j.id, state: j.state, orientation: j.orientation, job_type: j.job_type, error: j.render_error ? errs.plain(j.render_error, req.user.role, SKIN.name) : null, photos: await photosOf(j.id) });
+    res.set('Cache-Control', 'no-store').json({ id: j.id, state: j.state, orientation: j.orientation, job_type: j.job_type, area: j.area || '', error: j.render_error ? errs.plain(j.render_error, req.user.role, SKIN.name) : null, photos: await photosOf(j.id) });
   } catch (e) { next(e); } });
 
   app.get('/api/jobs', needUser({ json: true }), async (req, res, next) => { try {
-    res.set('Cache-Control', 'no-store').json((await visibleJobs(req.user)).map(r => ({ id: r.id, state: r.state, job_type: r.job_type, created_at: r.created_at, mine: r.user_id === req.user.id })));
+    res.set('Cache-Control', 'no-store').json((await visibleJobs(req.user)).map(r => ({ id: r.id, state: r.state, job_type: r.job_type, area: r.area || '', created_at: r.created_at, mine: r.user_id === req.user.id })));
   } catch (e) { next(e); } });
 
   async function visibleJobs(user) {
@@ -181,7 +187,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
 
   // ---------- screens ----------
   const LABEL = { draft: 'Draft', rendering: 'Making video…', ready: 'Needs approval', approved: 'Ready to share', shared: 'Shared', failed: 'Failed' };
-  const jobCard = (r, mine) => `<a class="job" href="/jobs/${r.id}"><div class="th" style="background-image:url('${r.cover ? `/api/jobs/${r.id}/cover` : `/api/jobs/${r.id}/photos/${r.has_after ? 'after' : 'before'}/0?t=1`}')"></div><div><b>${esc(r.job_type || 'Job')}</b><span class="small">${new Date(r.created_at).toLocaleDateString('en-GB')}${mine ? '' : ' · by crew'}</span><br><span class="pill${['approved', 'ready'].includes(r.state) ? ' on' : ''}">${LABEL[r.state]}</span></div></a>`;
+  const jobCard = (r, mine) => `<a class="job" href="/jobs/${r.id}"><div class="th" style="background-image:url('${r.cover ? `/api/jobs/${r.id}/cover` : `/api/jobs/${r.id}/photos/${r.has_after ? 'after' : 'before'}/0?t=1`}')"></div><div><b>${esc(r.job_type || 'Job')}</b>${r.area ? `<span class="small">${esc(r.area)}</span>` : ''}<span class="small">${new Date(r.created_at).toLocaleDateString('en-GB')}${mine ? '' : ' · by crew'}</span><br><span class="pill${['approved', 'ready'].includes(r.state) ? ' on' : ''}">${LABEL[r.state]}</span></div></a>`;
 
   app.get('/', needUser(), async (req, res, next) => { try {
     const u = req.user, rows = await visibleJobs(u);
@@ -197,10 +203,14 @@ ${u.role === 'owner' ? group('Needs approval', ['ready']) : ''}${group('Ready to
 ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'owner' || SKIN.crew_can_capture ? 'No jobs yet. Tap New job and take a before photo.' : 'Nothing shared yet. Videos the owner shares appear here.'}</p>`}`, { user: u }));
   } catch (e) { next(e); } });
 
-  app.get('/new', needUser(), capOk, (req, res) => res.set('Cache-Control', 'no-store').send(page('New job', `
+  app.get('/new', needUser(), capOk, async (req, res, next) => { try {
+    const last = (await pool.query('SELECT value FROM settings WHERE key=$1', ['lastarea:' + req.user.id])).rows[0];
+    res.set('Cache-Control', 'no-store').send(page('New job', `
 <h1>New job</h1>
 <form class="card" method="post" action="/api/jobs"><label class="f">What was the job?<select name="job_type">${SKIN.job_types.map(t => `<option>${esc(t)}</option>`).join('')}</select></label>
-<button type="submit">Start: take the before photo</button></form>`, { user: req.user })));
+<label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="${esc(last ? last.value : '')}" placeholder="For example: Selby"></label>
+<button type="submit">Start: take the before photo</button></form>`, { user: req.user }));
+  } catch (e) { next(e); } });
 
   app.get('/jobs/:id/capture', needUser(), capOk, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
@@ -311,7 +321,7 @@ note();
     const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
     const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
     res.set('Cache-Control', 'no-store').send(page('Job', `
-<h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>
+<h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>${j.area ? `<p class="small" style="margin:0 0 8px">📍 ${esc(j.area)}</p>` : ''}
 ${notStarted}${busy}${fail}${player}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve" style="margin-top:10px"><button type="submit">Approve</button></form>` : ''}
 ${sh ? sh.html : ''}
@@ -325,5 +335,5 @@ ${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return co
 <a class="btn sec" href="/">Back to jobs</a></div>`, { user: u, script: poll + (sh ? sh.script : '') + `var fs=document.getElementById('fs'),v=document.getElementById('vid');if(fs&&v)fs.addEventListener('click',function(){var f=v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen;if(f)f.call(v);});` }));
   } catch (e) { next(e); } });
 
-  return { init, getJob, removeJob, dirOf, STATES };
+  return { init, getJob, removeJob, dirOf, STATES, hubFields };
 };
