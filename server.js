@@ -43,7 +43,7 @@ async function initDb(tries = 30) {
   }
   throw new Error('Database not reachable');
 }
-const events = (type, userId = null, jobId = null, detail = '') => pool.query('INSERT INTO events (type,user_id,job_id,detail) VALUES ($1,$2,$3,$4)', [type, userId, jobId, String(detail).slice(0, 80)]).catch(() => {});
+const events = (type, userId = null, jobId = null, detail = '') => pool.query('INSERT INTO events (type,user_id,job_id,detail) VALUES ($1,$2,$3,$4)', [type, userId, jobId, String(detail).slice(0, 300)]).catch(() => {});
 
 app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id, crew_can_capture: SKIN.crew_can_capture, crew_enabled: SKIN.crew_enabled, commit: require('./lib/build').commit }));
 

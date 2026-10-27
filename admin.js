@@ -111,6 +111,26 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     for (const k of ['elevenlabs_key', 'anthropic_key', 'brevo_login', 'brevo_key', 'mail_from']) { const v = String(req.body[k] || '').trim(); if (v && /^[\x21-\x7e]{10,200}$/.test(v)) await secrets.set(k, v); }
     res.redirect(303, req.body.back ? '/settings?m=keys' : '/admin?m=keys');
   } catch (e) { next(e); } });
+  // recent events, newest first (optionally one type)
+  app.get('/admin/events', auth, async (req, res, next) => { try {
+    const t = String(req.query.type || '');
+    const r = await pool.query(`SELECT ts,type,job_id,detail FROM events ${t ? 'WHERE type=$1' : ''} ORDER BY id DESC LIMIT 40`, t ? [t] : []);
+    res.set('Cache-Control', 'no-store').json(r.rows);
+  } catch (e) { next(e); } });
+  // asks ElevenLabs exactly what it says about each voice with the stored key (never shows the key)
+  app.get('/admin/voice-check', auth, async (req, res, next) => { try {
+    const key = await secrets.get('elevenlabs_key'); if (!key) return res.json({ key: 'not set' });
+    const out = { key: 'set', length: key.length, voices: [] };
+    const say = async r => { let b = ''; try { b = await r.text(); } catch (e) {} let d = b; try { const j = JSON.parse(b); d = j.detail || j; } catch (e) {} return { status: r.status, detail: typeof d === 'string' ? d.slice(0, 300) : d }; };
+    try { out.user = await say(await fetch('https://api.elevenlabs.io/v1/user/subscription', { headers: { 'xi-api-key': key } })); } catch (e) { out.user = String(e.message); }
+    for (const v of SKIN.voices || []) {
+      const o = { id: v.id, label: v.label };
+      try { o.lookup = await say(await fetch('https://api.elevenlabs.io/v1/voices/' + encodeURIComponent(v.id), { headers: { 'xi-api-key': key } })); if (o.lookup.status === 200) o.lookup = { status: 200 }; } catch (e) { o.lookup = String(e.message); }
+      try { const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(v.id)}?output_format=mp3_22050_32`, { method: 'POST', headers: { 'xi-api-key': key, 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Hello.', model_id: process.env.ELEVEN_MODEL || 'eleven_v4' }) }); o.speech = r.status === 200 ? { status: 200 } : await say(r); } catch (e) { o.speech = String(e.message); }
+      out.voices.push(o);
+    }
+    res.set('Cache-Control', 'no-store').json(out);
+  } catch (e) { next(e); } });
   app.get('/admin/usage', auth, async (req, res, next) => { try {
     const q = async t => +(await pool.query('SELECT count(*)::int n FROM events WHERE type=$1', [t])).rows[0].n;
     res.set('Cache-Control', 'no-store').json({ voice_generations: await q('tts_generated'), lines_drafted: await q('lines_drafted'), keys: { elevenlabs: await secrets.has('elevenlabs_key'), anthropic: await secrets.has('anthropic_key') } });
