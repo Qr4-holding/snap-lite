@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const { esc, sameOrigin } = require('./lib/util');
+const { makeSpoken } = require('./lib/spoken');
 
 const MODEL = process.env.ELEVEN_MODEL || 'eleven_v4';
 const FALLBACK_MODEL = 'eleven_multilingual_v2';
@@ -13,8 +14,7 @@ module.exports = function voice({ app, pool, SKIN, ui, acct, jobsMod, getRender,
   const { needUser } = acct;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const voices = SKIN.voices || [];
-  const spokenName = SKIN.spoken_name || SKIN.short_name || SKIN.name;
-  const spoken = t => String(t).replace(SKIN.brandRe, spokenName);
+  const spoken = makeSpoken(SKIN);          // the business name as it is said (see lib/spoken.js); captions and the end card keep the written name
   const splitScript = s => String(s || '').split(/\n\s*\n/).map(x => x.trim());
 
   const mine = (u, j) => j && (u.role === 'owner' || j.user_id === u.id);

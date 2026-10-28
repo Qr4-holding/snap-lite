@@ -163,6 +163,33 @@ async function phaseHomeDelete() {
     if (CREW_CAP) { const cid = (await req(crew, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id; ok('crew do not get a Delete button', !/\/delete/.test((await req(crew, 'GET', '/')).text)); }
   }
 }
+async function phaseSpoken() {
+  console.log('\n== How the business name is spoken ==');
+  const { spokenForm, makeSpoken, brandRegex } = require('../lib/spoken');
+  ok('"EKP11" is said E K P one one', spokenForm('EKP11') === 'E K P one one', spokenForm('EKP11'));
+  ok('"EKP 11" is said E K P one one', spokenForm('EKP 11') === 'E K P one one');
+  ok('"AB Clearance 24" is said A B Clearance two four', spokenForm('AB Clearance 24') === 'A B Clearance two four', spokenForm('AB Clearance 24'));
+  ok('a plain name like "Acme" is said as written', spokenForm('Acme') === 'Acme');
+  ok('five capitals or five digits are left alone', spokenForm('ABCDE 12345') === 'ABCDE 12345');
+  ok('zero is said "zero"', spokenForm('K9 Skips 100') === 'K nine Skips one zero zero', spokenForm('K9 Skips 100'));
+  const mk = (name, short, extra = {}) => { const s = { name, short_name: short, ...extra }; s.brandRe = brandRegex(s); return makeSpoken(s); };
+  const ek = mk('EKP11 Waste Management', 'EKP11');
+  ok('every way of typing EKP11 in a line is spoken E K P one one', ek('Here is the yard, EKP11.') === 'Here is the yard, E K P one one.' && ek('Call EKP 11 today.') === 'Call E K P one one today.' && ek('Thanks from ekp11.') === 'Thanks from E K P one one.', ek('Here is the yard, EKP11.') + ' | ' + ek('Call EKP 11 today.') + ' | ' + ek('Thanks from ekp11.'));
+  ok('the full business name keeps "Waste Management"', ek('EKP11 Waste Management. Skip the skip.') === 'E K P one one Waste Management. Skip the skip.', ek('EKP11 Waste Management. Skip the skip.'));
+  const ab = mk('AB Clearance 24', 'AB Clearance 24');
+  ok('AB Clearance 24 is spoken A B Clearance two four', ab('AB Clearance 24. Cleared.') === 'A B Clearance two four. Cleared.', ab('AB Clearance 24. Cleared.'));
+  const ac = mk('Acme Skips', 'Acme');
+  ok('Acme is spoken as written and the rest of the line is untouched', ac('Acme did the job. UK wide.') === 'Acme did the job. UK wide.', ac('Acme did the job. UK wide.'));
+  const ov = mk('Kay Pea Eleven', 'KPE11', { spoken_name: 'Kay Pea eleven' });
+  ok('spoken_name overrides the rule', ov('Thanks from KPE11.') === 'Thanks from Kay Pea eleven.', ov('Thanks from KPE11.'));
+  // the real skins, and the proof that only the voice text changes
+  const { execFileSync } = require('child_process');
+  const real = skin => execFileSync('node', ['-e', `const S=require('./lib/skin');const sp=require('./lib/spoken').makeSpoken(S);const L=require('./lines')(S,{get:async()=>null});process.stdout.write(JSON.stringify({spoken:sp('Here is the yard. '+S.short_name+'. Skip the skip.'),written:L.sanitize(['Here is the yard.','And here it is.','Thanks from '+S.short_name+'.']).lines[2],override:S.spoken_name||null}))`], { cwd: path.join(__dirname, '..'), env: { ...process.env, SKIN: skin } }).toString();
+  const e = JSON.parse(real('ekp11')), d = JSON.parse(real('demo'));
+  ok('the EKP11 skin has no spoken_name, so the rule says E K P one one', e.override === null && /E K P one one\./.test(e.spoken), JSON.stringify(e));
+  ok('EKP11 captions and the end card keep the written name', /EKP11/.test(e.written) && !/E K P/.test(e.written), e.written);
+  ok('the demo skin still says its full name', /Demo Waste Services/.test(d.spoken), d.spoken);
+}
 async function phaseErrors() {
   console.log('\n== Plain-words errors ==');
   const E = require('../lib/errors'), BAD = /server|key\b|api|elevenlabs|status|\b[45]\d\d\b|undefined|\[object/i;
@@ -955,6 +982,7 @@ async function phaseRegServer() {
     if (['diag', 'all'].includes(which)) await phaseDiag();
     if (['help', 'all'].includes(which)) await phaseHelp();
     if (['errors', 'all'].includes(which)) await phaseErrors();
+    if (['spoken', 'all'].includes(which)) await phaseSpoken();
     if (['homedelete', 'all'].includes(which)) await phaseHomeDelete();
     if (['lines', 'all'].includes(which)) await phaseLines();
     if (['area', 'all'].includes(which)) await phaseArea();

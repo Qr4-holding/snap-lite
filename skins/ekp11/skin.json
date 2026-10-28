@@ -39,7 +39,6 @@
   "crew_enabled": false,
   "crew_can_capture": false,
   "orientation": "auto",
-  "spoken_name": "E K P eleven",
   "script_rules": [
     "Plain, specific, UK English. No digits, no pound signs.",
     "Never use: best, cheapest, guaranteed, vetted, certified, number one, award.",
