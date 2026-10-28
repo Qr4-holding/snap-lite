@@ -341,18 +341,18 @@ def end_card_png(ec, fmt, path, reg=None):
     # registration pill: centred, accent colour, white display font 32 px, its bottom edge 40 px above the bottom of the frame.
     # On a narrow frame the text goes on two lines (name, then "Registered carrier · number") rather than running off the edge.
     pill = None
-    if reg and reg.get('text'):
-        fr_ = F('display', 32); txt = reg['text']; lines_ = [txt]
-        if fr_.getlength(txt) + 56 > W - 80 and txt.count(' · ') >= 2:
-            a, b = txt.split(' · ', 1); lines_ = [a, b]
-        lh_ = int(32 * 1.3); ph = lh_ * len(lines_) + 28; pw = int(max(fr_.getlength(l) for l in lines_)) + 56
-        pill = (lines_, fr_, lh_, ph, pw)
-        H = H0 - (ph + 40 + 24)          # lay the card out above the pill
+    if reg and (reg.get('end_text') or reg.get('text')):
+        fr_ = F('display', 32); txt = reg.get('end_text') or reg['text']       # one line: "Registered carrier · <number>"
+        lh_ = int(32 * 1.3); ph = lh_ + 28; pw = int(fr_.getlength(txt)) + 56
+        pill = ([txt], fr_, lh_, ph, pw)
     gap = int(70 * s); total = sum(h for h, _ in blocks) + gap * (len(blocks) - 1)
     if total > H * 0.86:   # crowded card: tighten the gaps to fit
         gap = max(int(18 * s), int((H * 0.86 - sum(h for h, _ in blocks)) / max(1, len(blocks) - 1)))
         total = sum(h for h, _ in blocks) + gap * (len(blocks) - 1)
     y = (H - total) // 2
+    if pill:   # the content stays where it was; it only moves up, by the least needed, if it would touch the pill
+        over = (y + total) - (H0 - 40 - pill[3] - 24)
+        if over > 0: y -= over
     for h, fn in blocks: fn(y); y += h + gap
     H = H0
     d.rectangle((0, H - int(14 * s), W, H), fill=ACC)

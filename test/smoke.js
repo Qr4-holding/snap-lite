@@ -790,6 +790,13 @@ async function engine() {
   if (r.status !== 0 && !/FAIL/.test(r.stdout || '')) { fail++; console.log('FAIL  engine timing tests did not run: ' + (r.stderr || '').slice(-300)); }
 }
 
+// Standing rule: a test that changes a client's live settings (registration, keys, anything the owner can edit) runs on the demo only, never on a client's own app.
+async function onDemoOnly(what) {
+  let skin = ''; try { skin = (await (await fetch(BASE + '/health')).json()).skin; } catch (e) {}
+  if (skin === 'demo') return true;
+  console.log(`SKIP  ${what}: changes live settings, so it runs on the demo only (this app is "${skin || 'unknown'}")`);
+  return false;
+}
 // ---------------------------------------------------------------- registration mark
 async function phaseReg() {
   console.log('\n== Registration mark ==');
@@ -809,6 +816,7 @@ async function phaseReg() {
   const n40 = 'A'.repeat(40), n41 = 'A'.repeat(41);
   ok('a name of 40 characters is kept', ev({ ...full, name: n40 }, BIZ, at('2026-10-28')).text.startsWith(n40 + ' · Registered carrier'));
   ok('long name: over 40 characters drops the name', ev({ ...full, name: n41 }, BIZ, at('2026-10-28')).text === 'Registered carrier · CBDU527134');
+  ok('the end-card pill text is always just Registered carrier and the number, never the name', ev(full, BIZ, at('2026-10-28')).endText === 'Registered carrier · CBDU527134' && ev({ ...full, name: n41 }, BIZ, at('2026-10-28')).endText === 'Registered carrier · CBDU527134' && ev({ ...full, name: '' }, BIZ, at('2026-10-28')).endText === 'Registered carrier · CBDU527134' && ev(full, BIZ, at('2027-03-18')).endText === '');
   ok('the name defaults to the business name', ev({ ...full, name: '' }, BIZ, at('2026-10-28')).text === 'EKP11 · Registered carrier · CBDU527134');
   ok('warning starts 60 days before expiry and not before', ev(full, BIZ, at('2027-01-16')).warn === true && ev(full, BIZ, at('2027-01-15')).warn === false);
   ok('the warning date reads in plain words', ev(full, BIZ, at('2027-01-16')).expiryNice === '17 March 2027');
@@ -818,11 +826,11 @@ async function phaseReg() {
   const photo = async (n, w, h, shade) => { const f = path.join(dir, n); fs.writeFileSync(f, await jpeg(w, h, { shade })); return f; };
   const P = { b: await photo('b.jpg', 1200, 1600, 70), a: await photo('a.jpg', 1200, 1600, 40) };
   const L = { b: await photo('lb.jpg', 1600, 1200, 70), a: await photo('la.jpg', 1600, 1200, 40) };
-  const render = (tag, ph, regText) => {
+  const render = (tag, ph, regText, endText = 'Registered carrier · CBDU527134') => {
     const cfg = { out: path.join(dir, tag + '.mp4'), cover: path.join(dir, tag + '.jpg'), work: path.join(dir, 'w-' + tag), orientation: 'auto',
       brand: { logo: SK.logoFile, accent: SK.accent, strap: SK.tagline || '', web: SK.web || '', phone: SK.phone || '', email: SK.email || '' },
       end_card: SK.end_card || { headline: 'See the job', button: 'Get a quote', hold_seconds: 2 }, photos: [{ kind: 'before', src: ph.b }, { kind: 'after', src: ph.a }], voice: null, lines: [] };
-    if (regText) cfg.reg = { text: regText };
+    if (regText) cfg.reg = { text: regText, end_text: endText };
     cfg.end_card = { ...cfg.end_card, hold_seconds: 2 };
     const cf = path.join(dir, tag + '.json'); fs.writeFileSync(cf, JSON.stringify(cfg));
     const r = spawnSync('python3', ['-I', path.join(__dirname, '..', 'video', 'engine.py'), cf], { encoding: 'utf8', timeout: 240000 });
@@ -848,16 +856,17 @@ async function phaseReg() {
     ok('the long-name fallback gives a shorter tag', dw.maxx > ds.maxx && ds.maxx > 28 + 100, `full ends at x ${dw.maxx}, short at ${ds.maxx}`);
     const dur = parseFloat(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', withr.out], { encoding: 'utf8' }).stdout);
     const en = frame(none.out, dur - 0.5), ew = frame(withr.out, dur - 0.5);
-    const pill = box(en, ew, W, 60, H - 40 - 140, W - 60, H - 30);
-    ok('the end card has the registration pill in the accent colour at the bottom', pill.n > 3000, 'pixels ' + pill.n);
-    // the pill's colour: the skin accent
-    let acc = 0; const hex = SK.accent.replace('#', ''), [ar, ag, ab] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
-    for (let y = H - 40 - 140; y < H - 40; y++) for (let x = 60; x < W - 60; x++) { const i = (y * W + x) * 3; if (Math.abs(ew[i] - ar) < 12 && Math.abs(ew[i + 1] - ag) < 12 && Math.abs(ew[i + 2] - ab) < 12) acc++; }
-    ok('the pill is filled with the accent colour', acc > 3000, 'accent pixels ' + acc);
-    const rowAcc = y => { let c = 0; for (let x = 0; x < W; x++) { const k = (y * W + x) * 3; if (Math.abs(ew[k] - ar) < 12 && Math.abs(ew[k + 1] - ag) < 12 && Math.abs(ew[k + 2] - ab) < 12) c++; } return c; };
-    let top = H - 41; while (top > H / 2 && rowAcc(top - 1) > 40) top--;
-    let gapClear = true; for (let y = top - 16; y < top - 1; y++) for (let x = 0; x < W; x++) { const k = (y * W + x) * 3; if (ew[k] < 235 || ew[k + 1] < 235 || ew[k + 2] < 235) { gapClear = false; break; } }
-    ok('the end card content stops clear of the pill (a gap of white above it)', gapClear && top > H * 0.8, 'pill top at ' + top);
+    const rowAcc = y => { let c = 0, x0 = -1, x1 = -1; for (let x = 0; x < W; x++) { const k = (y * W + x) * 3; if (Math.abs(ew[k] - ar) < 12 && Math.abs(ew[k + 1] - ag) < 12 && Math.abs(ew[k + 2] - ab) < 12) { c++; if (x0 < 0) x0 = x; x1 = x; } } return { c, x0, x1 }; };
+    const hex = SK.accent.replace('#', ''), [ar, ag, ab] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+    let top = H - 41; while (top > H / 2 && rowAcc(top - 1).c > 40) top--;
+    const ph = H - 40 - top, mid = rowAcc(top + 6);
+    ok('the end-card pill is one line (about 69 px high), 40 px up from the bottom', ph >= 64 && ph <= 74, 'pill height ' + ph);
+    ok('the pill is a centred accent-colour pill', mid.c > 300 && Math.abs((mid.x0 + mid.x1) / 2 - W / 2) < 4, `x ${mid.x0}-${mid.x1}`);
+    const pillRegion = box(en, ew, W, 0, top - 2, W, H - 30);
+    ok('the end card gains the pill at the bottom', pillRegion.n > 2000, 'pixels ' + pillRegion.n);
+    const above = box(en, ew, W, 0, 0, W, top - 2);
+    ok('the end-card content is exactly where it was without the mark', above.n < 50, 'pixels moved above the pill ' + above.n);
+    ok('the pill is narrower than the old two-line name pill (no name on it)', mid.x1 - mid.x0 < 700, `width ${mid.x1 - mid.x0}`);
     ok('the end card text is not on the body and the body tag is not on the end card', box(f1w, frame(withr.out, 1.5), W, 0, 0, W, H).n === 0);
   }
   // landscape
@@ -870,6 +879,7 @@ async function phaseReg() {
 async function phaseRegServer() {
   console.log('\n== Registration mark: Settings, Home warning and a remake ==');
   if (!ADMIN_PW) return;
+  if (!(await onDemoOnly('registration settings'))) return;
   const { spawnSync } = require('child_process'), os = require('os');
   const A = { headers: { accept: 'application/json' } };
   const email = `reg-${RUN}${TEST}`, pw = 'Reg-pass-' + RUN;

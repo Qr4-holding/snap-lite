@@ -27,7 +27,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
       voice: null, lines: []
     };
     const rg = await regMod.get();                 // the registration mark: read at render time, so a remake picks up changes
-    if (rg.active) cfg.reg = { text: rg.text };
+    if (rg.active) cfg.reg = { text: rg.text, end_text: rg.endText };
     const v = await getVoice().ensure(j, dir);          // null = silent video; otherwise the saved or freshly made recording
     if (v) { cfg.voice = v.voice; cfg.lines = v.lines; }
     return cfg;
