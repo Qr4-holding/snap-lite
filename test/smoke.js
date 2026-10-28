@@ -790,6 +790,143 @@ async function engine() {
   if (r.status !== 0 && !/FAIL/.test(r.stdout || '')) { fail++; console.log('FAIL  engine timing tests did not run: ' + (r.stderr || '').slice(-300)); }
 }
 
+// ---------------------------------------------------------------- registration mark
+async function phaseReg() {
+  console.log('\n== Registration mark ==');
+  const { spawnSync } = require('child_process'), os = require('os');
+  const R = require('../lib/reg'), ev = R.evaluate;
+  // ---- the rules (pure, with a fixed clock)
+  const at = d => new Date(d + 'T12:00:00Z'), BIZ = 'EKP11';
+  const full = { name: 'EKP11 Property & Waste Management', number: 'CBDU527134', expiry: '2027-03-17' };
+  const a = ev(full, BIZ, at('2026-10-28'));
+  ok('present: number and expiry set, before expiry', a.active && a.text === 'EKP11 Property & Waste Management · Registered carrier · CBDU527134', a.text);
+  ok('present on the expiry day itself', ev(full, BIZ, at('2027-03-17')).active);
+  const ex = ev(full, BIZ, at('2027-03-18'));
+  ok('expired: off the day after expiry, no text', !ex.active && ex.expired && ex.text === '');
+  ok('absent: no number means no mark', !ev({ ...full, number: '' }, BIZ, at('2026-10-28')).active);
+  ok('absent: no expiry means no mark', !ev({ ...full, expiry: '' }, BIZ, at('2026-10-28')).active);
+  ok('absent: a date that is not real means no mark', !ev({ ...full, expiry: '2027-02-30' }, BIZ, at('2026-10-28')).active);
+  const n40 = 'A'.repeat(40), n41 = 'A'.repeat(41);
+  ok('a name of 40 characters is kept', ev({ ...full, name: n40 }, BIZ, at('2026-10-28')).text.startsWith(n40 + ' · Registered carrier'));
+  ok('long name: over 40 characters drops the name', ev({ ...full, name: n41 }, BIZ, at('2026-10-28')).text === 'Registered carrier · CBDU527134');
+  ok('the name defaults to the business name', ev({ ...full, name: '' }, BIZ, at('2026-10-28')).text === 'EKP11 · Registered carrier · CBDU527134');
+  ok('warning starts 60 days before expiry and not before', ev(full, BIZ, at('2027-01-16')).warn === true && ev(full, BIZ, at('2027-01-15')).warn === false);
+  ok('the warning date reads in plain words', ev(full, BIZ, at('2027-01-16')).expiryNice === '17 March 2027');
+
+  // ---- the engine, locally: portrait and landscape bodies, end card, long-name fallback, none
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reg-')), SK = require('../lib/skin');
+  const photo = async (n, w, h, shade) => { const f = path.join(dir, n); fs.writeFileSync(f, await jpeg(w, h, { shade })); return f; };
+  const P = { b: await photo('b.jpg', 1200, 1600, 70), a: await photo('a.jpg', 1200, 1600, 40) };
+  const L = { b: await photo('lb.jpg', 1600, 1200, 70), a: await photo('la.jpg', 1600, 1200, 40) };
+  const render = (tag, ph, regText) => {
+    const cfg = { out: path.join(dir, tag + '.mp4'), cover: path.join(dir, tag + '.jpg'), work: path.join(dir, 'w-' + tag), orientation: 'auto',
+      brand: { logo: SK.logoFile, accent: SK.accent, strap: SK.tagline || '', web: SK.web || '', phone: SK.phone || '', email: SK.email || '' },
+      end_card: SK.end_card || { headline: 'See the job', button: 'Get a quote', hold_seconds: 2 }, photos: [{ kind: 'before', src: ph.b }, { kind: 'after', src: ph.a }], voice: null, lines: [] };
+    if (regText) cfg.reg = { text: regText };
+    cfg.end_card = { ...cfg.end_card, hold_seconds: 2 };
+    const cf = path.join(dir, tag + '.json'); fs.writeFileSync(cf, JSON.stringify(cfg));
+    const r = spawnSync('python3', ['-I', path.join(__dirname, '..', 'video', 'engine.py'), cf], { encoding: 'utf8', timeout: 240000 });
+    return { ok: r.status === 0, out: cfg.out, err: (r.stderr || '').slice(-300) };
+  };
+  const frame = (file, t, w, h) => spawnSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 }).stdout;
+  const box = (a, b, W, x0, y0, x1, y1, th = 40) => { let n = 0, maxx = -1; for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = (y * W + x) * 3; if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > th) { n++; if (x > maxx) maxx = x; } } return { n, maxx }; };
+  const FULLT = 'EKP11 Property & Waste Management · Registered carrier · CBDU527134', SHORTT = 'Registered carrier · CBDU527134';
+  const none = render('none', P, ''), withr = render('with', P, FULLT), shortr = render('short', P, SHORTT);
+  ok('the engine renders with and without the mark', none.ok && withr.ok && shortr.ok, none.err + withr.err + shortr.err);
+  if (none.ok && withr.ok && shortr.ok) {
+    const W = 1080, H = 1920;
+    for (const [label, t] of [['the cover frame', 0.2], ['a photo (BEFORE)', 1.5], ['the reveal', 4.2]]) {
+      const d = box(frame(none.out, t), frame(withr.out, t), W, 20, H - 36 - 70, 1060, H - 30);
+      ok(`the mark is on ${label}, bottom-left`, d.n > 400, 'differing pixels ' + d.n);
+    }
+    const f1n = frame(none.out, 1.5), f1w = frame(withr.out, 1.5), f1s = frame(shortr.out, 1.5);
+    const outside = box(f1n, f1w, W, 0, 0, W, H - 130);
+    ok('nothing else in the picture changes', outside.n < 200, 'pixels ' + outside.n);
+    const left = box(f1n, f1w, W, 0, H - 130, 20, H - 20);
+    ok('the tag starts 28 px in from the left, not before', left.n === 0);
+    const dw = box(f1n, f1w, W, 0, H - 130, W, H - 20), ds = box(f1n, f1s, W, 0, H - 130, W, H - 20);
+    ok('the long-name fallback gives a shorter tag', dw.maxx > ds.maxx && ds.maxx > 28 + 100, `full ends at x ${dw.maxx}, short at ${ds.maxx}`);
+    const dur = parseFloat(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', withr.out], { encoding: 'utf8' }).stdout);
+    const en = frame(none.out, dur - 0.5), ew = frame(withr.out, dur - 0.5);
+    const pill = box(en, ew, W, 60, H - 40 - 140, W - 60, H - 30);
+    ok('the end card has the registration pill in the accent colour at the bottom', pill.n > 3000, 'pixels ' + pill.n);
+    // the pill's colour: the skin accent
+    let acc = 0; const hex = SK.accent.replace('#', ''), [ar, ag, ab] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+    for (let y = H - 40 - 140; y < H - 40; y++) for (let x = 60; x < W - 60; x++) { const i = (y * W + x) * 3; if (Math.abs(ew[i] - ar) < 12 && Math.abs(ew[i + 1] - ag) < 12 && Math.abs(ew[i + 2] - ab) < 12) acc++; }
+    ok('the pill is filled with the accent colour', acc > 3000, 'accent pixels ' + acc);
+    const rowAcc = y => { let c = 0; for (let x = 0; x < W; x++) { const k = (y * W + x) * 3; if (Math.abs(ew[k] - ar) < 12 && Math.abs(ew[k + 1] - ag) < 12 && Math.abs(ew[k + 2] - ab) < 12) c++; } return c; };
+    let top = H - 41; while (top > H / 2 && rowAcc(top - 1) > 40) top--;
+    let gapClear = true; for (let y = top - 16; y < top - 1; y++) for (let x = 0; x < W; x++) { const k = (y * W + x) * 3; if (ew[k] < 235 || ew[k + 1] < 235 || ew[k + 2] < 235) { gapClear = false; break; } }
+    ok('the end card content stops clear of the pill (a gap of white above it)', gapClear && top > H * 0.8, 'pill top at ' + top);
+    ok('the end card text is not on the body and the body tag is not on the end card', box(f1w, frame(withr.out, 1.5), W, 0, 0, W, H).n === 0);
+  }
+  // landscape
+  const ln = render('ln', L, ''), lw = render('lw', L, FULLT);
+  if (ln.ok && lw.ok) { const d = box(frame(ln.out, 1.5), frame(lw.out, 1.5), 1920, 20, 1080 - 36 - 70, 1900, 1080 - 30); ok('landscape frames carry the mark too, bottom-left', d.n > 400, 'pixels ' + d.n); }
+  else ok('landscape renders', false, ln.err + lw.err);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+async function phaseRegServer() {
+  console.log('\n== Registration mark: Settings, Home warning and a remake ==');
+  if (!ADMIN_PW) return;
+  const { spawnSync } = require('child_process'), os = require('os');
+  const A = { headers: { accept: 'application/json' } };
+  const email = `reg-${RUN}${TEST}`, pw = 'Reg-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Reg Test', email, password: pw }) });
+  const owner = (await login(email, pw)).p;
+  let crew = null;
+  if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `regcrew-${RUN}${TEST}` }) }); crew = (await login(`regcrew-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
+  const ds = (await req(owner, 'GET', '/settings')).text;
+  const hasDefault = /On every new video until/.test(ds);
+  ok('Settings shows the registration form to the owner', /Waste carrier registration/.test(ds) && /name="number"/.test(ds) && /type="date"/.test(ds));
+  if (crew) ok('crew do not see the registration form or warning', !/Waste carrier registration/.test((await req(crew, 'GET', '/settings')).text) && !/waste carrier registration/i.test((await req(crew, 'GET', '/')).text));
+  const bad = await req(owner, 'POST', '/settings/registration', { body: form({ name: '', number: 'bad number!', expiry: '2027-03-17' }) });
+  ok('a malformed number is refused with a plain reason', bad.status === 303 && /m=regbad/.test(bad.loc) && /Not saved: the registration number/.test((await req(owner, 'GET', '/settings?m=regbad')).text));
+  const bd = await req(owner, 'POST', '/settings/registration', { body: form({ name: '', number: 'CBDU123456', expiry: '2027-02-30' }) });
+  ok('a date that is not real is refused', /m=regbad/.test(bd.loc));
+  const day = n => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); };
+  const nice = s => new Date(s + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const setReg = (n, num, exp) => req(owner, 'POST', '/settings/registration', { body: form({ name: n, number: num, expiry: exp }) });
+  const frameOf = async (id, t) => { const f = path.join(os.tmpdir(), `reg-${RUN}-${id}.mp4`); const r = await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: owner.cookie } }); fs.writeFileSync(f, Buffer.from(await r.arrayBuffer())); const o = spawnSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', f, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 }).stdout; fs.rmSync(f, { force: true }); return o; };
+  const waitDone = async id => { for (let i = 0; i < 120; i += 3) { const s = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') return s.state; await new Promise(r => setTimeout(r, 3000)); } return 'timeout'; };
+  const diffBox = (a, b) => { const W = 1080, H = 1920; let n = 0; for (let y = H - 36 - 70; y < H - 30; y++) for (let x = 20; x < 1060; x++) { const i = (y * W + x) * 3; if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 40) n++; } return n; };
+  try {
+    // Home warning from 60 days before expiry
+    await setReg('', 'CBDU123456', day(30));
+    let home = (await req(owner, 'GET', '/')).text;
+    ok('Home warns the owner 30 days before expiry, in plain words', home.includes(`Your waste carrier registration expires on ${nice(day(30))}.`) && /Renew it and update the date in <a href="\/settings">Settings<\/a>\./.test(home));
+    await setReg('', 'CBDU123456', day(90));
+    ok('no warning 90 days before expiry', !/waste carrier registration/i.test((await req(owner, 'GET', '/')).text));
+    if (crew) { await setReg('', 'CBDU123456', day(10)); ok('crew never see the warning', !/waste carrier registration/i.test((await req(crew, 'GET', '/')).text)); }
+    await setReg('', 'CBDU123456', day(-1));
+    ok('the day after expiry the owner is told the mark is off', /expired on/.test((await req(owner, 'GET', '/')).text) && /Expired on/.test((await req(owner, 'GET', '/settings')).text));
+    const part = await setReg('', '', day(90));
+    ok('number or date missing: saved, with a note that no mark shows', /m=regpart/.test(part.loc) && /only shows on videos when both/.test((await req(owner, 'GET', '/settings?m=regpart')).text));
+    // a remake picks the mark up: valid -> render, expired -> remake (mark gone), valid again -> remake (mark back)
+    await setReg('', 'CBDU123456', day(90));
+    const id = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+    await upload(owner, id, 'before', 0, await jpeg(1200, 1600, { shade: 70 })); await upload(owner, id, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
+    await req(owner, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'Thanks for watching.' }) });
+    ok('a video renders with the mark on', await waitDone(id) === 'ready');
+    const withMark = await frameOf(id, 1.5);
+    await setReg('', 'CBDU123456', day(-1));
+    ok('remake after the registration expired starts', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 200 && await waitDone(id) === 'ready');
+    const noMark = await frameOf(id, 1.5);
+    ok('the remade video has no mark once expired', diffBox(withMark, noMark) > 400, 'pixels ' + diffBox(withMark, noMark));
+    await setReg('', 'CBDU123456', day(90));
+    ok('remake after the registration is current starts', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 200 && await waitDone(id) === 'ready');
+    const back = await frameOf(id, 1.5);
+    ok('a remake picks the mark up again', diffBox(noMark, back) > 400 && diffBox(withMark, back) < 400, `vs none ${diffBox(noMark, back)}, vs first ${diffBox(withMark, back)}`);
+    await req(owner, 'DELETE', `/api/jobs/${id}`);
+  } finally {
+    const r = await req(owner, 'POST', '/settings/registration/reset', { body: '' });
+    ok('the standard details are put back', r.status === 303 && /m=regreset/.test(r.loc));
+    const after = (await req(owner, 'GET', '/settings')).text;
+    ok('after the tests the skin standard is what is shown', hasDefault ? /On every new video until/.test(after) : /No mark is shown until/.test(after));
+  }
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -812,6 +949,8 @@ async function engine() {
     if (['lines', 'all'].includes(which)) await phaseLines();
     if (['area', 'all'].includes(which)) await phaseArea();
     if (['adminback', 'all'].includes(which)) await phaseAdminBack();
+    if (['reg', 'regengine', 'all'].includes(which)) await phaseReg();
+    if (['reg', 'all'].includes(which)) await phaseRegServer();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }

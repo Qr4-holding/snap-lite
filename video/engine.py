@@ -53,6 +53,30 @@ def plate_for(path, W, H):
     return N._plate(im, W, H, 'cover' if same else 'fit')
 
 
+REGTAG = None   # (RGBA layer, (x, y)) when the registration mark is on; set per render
+
+
+def make_regtag(text, W, H):
+    """The registration mark for the video body: a rounded tag, 60% white, dark grey body-font text,
+    28 px in from the left and 36 px up from the bottom of the frame (sizes are for a 1080-wide frame; both our frames have a 1080 short side)."""
+    s = min(W, H) / 1080.0
+    f = E.F('body', max(8, round(24 * s)))
+    px, py = round(14 * s), round(9 * s)
+    tw = f.getlength(text); asc, desc = f.getmetrics()
+    w, h = round(tw + 2 * px), round(asc + desc + 2 * py)
+    bg = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(bg).rounded_rectangle((0, 0, w - 1, h - 1), round(12 * s), fill=(255, 255, 255, 153))      # 153/255 = 60%
+    tx = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(tx).text((px, py), text, font=f, fill=(51, 51, 51, 255))
+    layer = Image.alpha_composite(bg, tx)
+    return layer, (round(28 * s), H - round(36 * s) - h)
+
+
+def stamp(img):
+    if REGTAG: img.paste(REGTAG[0], REGTAG[1], REGTAG[0])
+    return img
+
+
 def encoder(W, H, out, nf):
     silent = ['-f', 'lavfi', '-t', f'{nf / FPS:.4f}', '-i', f'anullsrc=r={SR}:cl=stereo']
     return subprocess.Popen(['ffmpeg', '-y', '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-'] + silent +
@@ -78,7 +102,7 @@ def still_segment(plate, text, nf, out, W, H, zoom_dir='in'):
         t = k / max(1, nf - 1); z = (t if zoom_dir == 'in' else 1 - t) * 0.08 / 1.08
         cw, ch = big.width * (1 - z), big.height * (1 - z); l, tp = (big.width - cw) / 2, (big.height - ch) / 2
         fr = big.crop((round(l), round(tp), round(l + cw), round(tp + ch))).resize((W, H), Image.BILINEAR)
-        label(fr, text, W, H); p.stdin.write(fr.tobytes())
+        label(fr, text, W, H); stamp(fr); p.stdin.write(fr.tobytes())
     p.stdin.close(); p.wait()
 
 
@@ -90,7 +114,7 @@ def cover_frame(B, A, W, H):
     r = int(min(W, H) * .085); cx, cy = W // 2, H // 2
     d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=E.WHITE)
     d.polygon([(cx - r * .32, cy - r * .5), (cx - r * .32, cy + r * .5), (cx + r * .55, cy)], fill=INK)
-    return fr
+    return stamp(fr)
 
 
 def still_frame_segment(fr, nf, out, W, H):
@@ -112,7 +136,7 @@ def reveal_segment(B, A, nf, out, W, H):
         if 0 < x < W: ImageDraw.Draw(fr).rectangle((x - 4, 0, x + 4, H), fill=E.WHITE)
         if x > W * 0.3: N._label(fr, 'BEFORE', 32, ly, size)
         if x < W * 0.75: N._label(fr, 'AFTER', W - 32, ly, size, right=True)
-        p.stdin.write(fr.tobytes())
+        stamp(fr); p.stdin.write(fr.tobytes())
     p.stdin.close(); p.wait()
 
 
@@ -201,6 +225,9 @@ def render(cfg):
     br = cfg['brand']
     E.BRAND = {'logo': br['logo'], 'accent': hexrgb(br['accent']), 'strap': br.get('strap', ''), 'web': br.get('web', ''), 'phone': br.get('phone', ''), 'email': br.get('email', '')}
     ec = cfg['end_card']
+    global REGTAG
+    reg = cfg.get('reg') or None            # {"text": ...} only when the registration is current; otherwise no mark anywhere
+    REGTAG = make_regtag(reg['text'], W, H) if reg and reg.get('text') else None
     B, A = plate_for(before['src'], W, H), plate_for(after['src'], W, H)
 
     voice = cfg.get('voice') or None
@@ -244,7 +271,7 @@ def render(cfg):
     for i, d in enumerate(during):
         add(f'during{i}', lambda o, d=d, i=i: still_segment(plate_for(d['src'], W, H), 'DURING', each[1 + i], o, W, H))
     add('reveal', lambda o: reveal_segment(B, A, reveal_f, o, W, H))
-    png = os.path.join(work, 'end.png'); E.end_card_png(ec, fmt, png)
+    png = os.path.join(work, 'end.png'); E.end_card_png(ec, fmt, png, reg)
     endmp4 = os.path.join(work, 'end.mp4'); p = encoder(W, H, endmp4, end_f); raw = Image.open(png).convert('RGB').tobytes()
     for _ in range(end_f): p.stdin.write(raw)
     p.stdin.close(); p.wait(); segs.append(endmp4)

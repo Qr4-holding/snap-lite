@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const errs = require('./lib/errors');
+const regFor = require('./lib/reg');
 const express = require('express');
 const multer = require('multer');
 const photo = require('./lib/photo');
@@ -234,8 +235,10 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     }
     const group = (title, states) => { const list = rows.filter(r => states.includes(r.state)); return list.length ? `<h2>${title} <span class="small">(${list.length})</span></h2><div class="jobs">${list.map(r => jobCard(r, r.user_id === u.id, u.role === 'owner')).join('')}</div>` : ''; };
     const flash = { deleted: 'Job deleted.' }[req.query.m] || '';
+    const rg = u.role === 'owner' ? await regFor(pool, SKIN).get() : null;
+    const regWarn = rg && rg.set && rg.warn ? `<p class="msg bad" role="alert">${rg.expired ? `Your waste carrier registration expired on ${esc(rg.expiryNice)}, so the registration mark is off your videos. Renew it and update the date in <a href="/settings">Settings</a>.` : `Your waste carrier registration expires on ${esc(rg.expiryNice)}. Renew it and update the date in <a href="/settings">Settings</a>.`}</p>` : '';
     res.set('Cache-Control', 'no-store').send(page('Jobs', `
-${msg(flash)}${u.role === 'owner' || SKIN.crew_can_capture ? '<a class="btn" href="/new" style="min-height:72px;font-size:22px">＋ New job</a>' : ''}
+${regWarn}${msg(flash)}${u.role === 'owner' || SKIN.crew_can_capture ? '<a class="btn" href="/new" style="min-height:72px;font-size:22px">＋ New job</a>' : ''}
 ${u.role === 'owner' ? group('Needs approval', ['ready']) : ''}${group('Ready to share', ['approved'])}${group('Shared', ['shared'])}${group('Drafts', ['draft', 'rendering'])}${group('Failed', ['failed'])}
 ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'owner' || SKIN.crew_can_capture ? 'No jobs yet. Tap New job and take a before photo.' : 'Nothing shared yet. Videos the owner shares appear here.'}</p>`}`, { user: u }));
   } catch (e) { next(e); } });

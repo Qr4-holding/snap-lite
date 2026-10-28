@@ -291,8 +291,9 @@ def brand_mark(d_img, cx, y, width):
     return h
 
 
-def end_card_png(ec, fmt, path):
+def end_card_png(ec, fmt, path, reg=None):
     W, H = FORMATS[fmt]
+    H0 = H
     s = {'9x16': 1.0, '1x1': 0.8, '16x9': 0.8}[fmt]
     im = Image.new('RGB', (W, H), WHITE); d = ImageDraw.Draw(im)
     blocks = []  # (height, draw_fn)
@@ -337,13 +338,28 @@ def end_card_png(ec, fmt, path):
         x = (W - sum(fs.getlength(t) for t, _ in sp)) / 2
         for t, c in sp: d.text((x, y), t, font=fs, fill=c); x += fs.getlength(t)
     blocks.append((int(60 * s), strap))
+    # registration pill: centred, accent colour, white display font 32 px, its bottom edge 40 px above the bottom of the frame.
+    # On a narrow frame the text goes on two lines (name, then "Registered carrier · number") rather than running off the edge.
+    pill = None
+    if reg and reg.get('text'):
+        fr_ = F('display', 32); txt = reg['text']; lines_ = [txt]
+        if fr_.getlength(txt) + 56 > W - 80 and txt.count(' · ') >= 2:
+            a, b = txt.split(' · ', 1); lines_ = [a, b]
+        lh_ = int(32 * 1.3); ph = lh_ * len(lines_) + 28; pw = int(max(fr_.getlength(l) for l in lines_)) + 56
+        pill = (lines_, fr_, lh_, ph, pw)
+        H = H0 - (ph + 40 + 24)          # lay the card out above the pill
     gap = int(70 * s); total = sum(h for h, _ in blocks) + gap * (len(blocks) - 1)
     if total > H * 0.86:   # crowded card: tighten the gaps to fit
         gap = max(int(18 * s), int((H * 0.86 - sum(h for h, _ in blocks)) / max(1, len(blocks) - 1)))
         total = sum(h for h, _ in blocks) + gap * (len(blocks) - 1)
     y = (H - total) // 2
     for h, fn in blocks: fn(y); y += h + gap
+    H = H0
     d.rectangle((0, H - int(14 * s), W, H), fill=ACC)
+    if pill:
+        lines_, fr_, lh_, ph, pw = pill; x0 = (W - pw) // 2; y0 = H - 40 - ph
+        d.rounded_rectangle((x0, y0, x0 + pw, y0 + ph), ph // 2 if len(lines_) == 1 else 28, fill=ACC)
+        for k, l in enumerate(lines_): d.text(((W - fr_.getlength(l)) / 2, y0 + 14 + k * lh_), l, font=fr_, fill=WHITE)
     im.save(path)
 
 

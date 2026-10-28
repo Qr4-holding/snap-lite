@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { clean, esc, slugify, EMAIL, hashPw, checkPw, cookies, sameOrigin, limited } = require('./lib/util');
 
+const regFor = require('./lib/reg');
 module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const { page, msg } = ui;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
@@ -134,15 +135,24 @@ ${joinBlock()}`);
     const u = req.user;
     const crew = u.role === 'owner' ? (await pool.query(`SELECT id,email,name,created_at FROM users WHERE biz_id=$1 AND role='crew' AND deleted_at IS NULL ORDER BY id`, [u.biz_id])).rows : [];
     const people = u.role === 'owner' ? (await pool.query(`SELECT id,email,role FROM users WHERE biz_id=$1 AND id<>$2 AND deleted_at IS NULL ORDER BY id`, [u.biz_id, u.id])).rows : [];
-    const q = req.query, flash = { invited: '', keys: 'Keys saved.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
+    const rgv = u.role === 'owner' ? await regFor(pool, SKIN).get() : null;
+    const q = req.query, flash = { invited: '', keys: 'Keys saved.', reg: 'Registration details saved.', regpart: 'Saved. The mark only shows on videos when both the registration number and the expiry date are filled in.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: the registration number should be letters and numbers only, for example CBDU123456, and the expiry must be a real date.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
     res.set('Cache-Control', 'no-store').send(page('Settings', `
-<h1>Settings</h1>${msg(flash, /^(bad|dup|badpw)$/.test(q.m || ''))}${invited}
+<h1>Settings</h1>${msg(flash, /^(bad|dup|badpw|regbad)$/.test(q.m || ''))}${invited}
 <p>Signed in as <b>${esc(u.email)}</b> (${u.role}).</p>
 ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
 <form class="card" method="post" action="/settings/invite"><label class="f">Crew email<input name="email" type="email" required inputmode="email"></label><button type="submit">Create crew login</button><span class="small">Crew can take photos and make videos. Only you can approve and share.</span></form>` : ''}
 ${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div class="jobs">${people.map(c => `<div class="card"><b>${esc(c.email)}</b> <span class="small">(${c.role})</span><form method="post" action="/settings/users/${c.id}/reset" onsubmit="return confirm('Reset this password? They will be signed out.')"><button class="sec small" type="submit">Reset password</button></form></div>`).join('')}</div>` : ''}
+${rgv ? `<h2>Waste carrier registration</h2>
+<form class="card" method="post" action="/settings/registration"><p class="small" style="margin:0">Shown as a small mark on every new video and on the end card, while the registration is current. It comes off the day after the expiry date. Videos already made are not changed.</p>
+<label class="f">Name on the registration<input name="name" maxlength="100" value="${esc(rgv.rawName || '')}" placeholder="${esc(SKIN.short_name || SKIN.name)}"></label>
+<label class="f">Registration number<input name="number" maxlength="20" autocapitalize="characters" value="${esc(rgv.number)}" placeholder="CBDU123456"></label>
+<label class="f">Expiry date<input name="expiry" type="date" value="${esc(rgv.expiry)}"></label>
+<p class="small" style="margin:0">${rgv.active ? `On every new video until ${esc(rgv.expiryNice)}: <b>${esc(rgv.text)}</b>` : rgv.expired ? `Expired on ${esc(rgv.expiryNice)}, so no mark is shown.` : 'No mark is shown until the number and the expiry date are both filled in.'}</p>
+<button type="submit">Save registration</button></form>
+${rgv.overridden ? '<form method="post" action="/settings/registration/reset"><button class="sec" type="submit">Put back the standard details</button></form>' : ''}` : ''}
 <h2>Change password</h2>
 <form class="card" method="post" action="/settings/password"><label class="f">Current password<input name="current" type="password" required autocomplete="current-password"></label><label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>
 ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are switched on here. Sign in with the admin login.</p><p><a class="btn sec" href="/admin">Voice and writing keys</a></p>` : ''}
@@ -170,6 +180,13 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
     res.redirect(303, '/settings?m=removed');
   } catch (e) { next(e); } });
 
+  app.post('/settings/registration', sameOrigin, needOwner, form, async (req, res, next) => { try {
+    const r = await regFor(pool, SKIN).save(req.body || {});
+    res.redirect(303, '/settings?m=' + (!r.ok ? 'regbad' : r.complete ? 'reg' : 'regpart'));
+  } catch (e) { next(e); } });
+  app.post('/settings/registration/reset', sameOrigin, needOwner, form, async (req, res, next) => { try {
+    await regFor(pool, SKIN).reset(); res.redirect(303, '/settings?m=regreset');
+  } catch (e) { next(e); } });
   app.post('/settings/password', sameOrigin, needUser(), form, async (req, res, next) => { try {
     const row = (await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.user.id])).rows[0];
     const nx = String(req.body.next || '');
