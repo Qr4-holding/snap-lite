@@ -1239,7 +1239,7 @@ async function phaseRecordServer() {
   const pg = (await req(owner, 'GET', `/jobs/${id}/record`)).text;
   ok('the record form asks for address, customer, quantity, description, EWC, flags, disposal and a receipt', ['addr1', 'cust_name', 'cust_addr', 'commercial', 'qty', 'waste_desc', 'ewc', 'flag_pops', 'flag_asbestos', 'tip_name', 'tip_licence', 'tip_date', 'tip_ticket'].every(n => pg.includes(`name="${n}"`)) && /type="file"/.test(pg) && /Tip receipt or weighbridge ticket/.test(pg));
   ok('quantity choices are the van-load scale', ['Quarter load', 'Half load', 'Three-quarter load', 'Full load', 'More than one load'].every(l => pg.includes(l)));
-  ok('the commercial box is off, and the SIC link goes to Companies House', !/name="commercial"[^>]*checked/.test(pg) && /resources\.companieshouse\.gov\.uk\/sic\//.test(pg));
+  ok('the commercial box is off, and the SIC link goes to Companies House', !/name="commercial" value="1" style="width:auto" checked/.test(pg) && /resources\.companieshouse\.gov\.uk\/sic\//.test(pg));
   ok('the EWC code is on the form for the owner only', /name="ewc"/.test(pg));
   if (crew) {
     const cid = await mk(crew);
