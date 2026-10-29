@@ -150,6 +150,10 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     for (const [k, f] of [['reg_name', 'name'], ['reg_number', 'number'], ['reg_expiry', 'expiry'], ['reg_tier', 'tier'], ['reg_checked', 'checked']]) await put(k, b[f]);
     res.json({ ok: true });
   } catch (e) { next(e); } });
+  // run the nightly registration re-check now (also used by the tests)
+  app.post('/admin/recheck-registration', auth, sameOrigin, form, async (req, res, next) => { try {
+    res.json(await require('./lib/reg')(pool, SKIN).recheck());
+  } catch (e) { next(e); } });
   app.post('/admin/purge-test', auth, sameOrigin, form, async (req, res, next) => { try {
     const ids = (await pool.query('SELECT id FROM users WHERE email LIKE $1', ['%' + acct.TEST_DOMAIN])).rows.map(r => r.id);
     if (ids.length) {

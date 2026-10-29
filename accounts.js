@@ -159,6 +159,7 @@ ${rgv ? `<h2>Waste carrier registration</h2>
 <label class="f">Registration number<input name="number" maxlength="20" autocapitalize="characters" value="${esc(rgv.number)}" placeholder="CBDU123456"></label>
 <label class="f">Expiry date <span class="small">(filled in from the register; only type it if the register can't be reached)</span><input name="expiry" type="date" value="${esc(rgv.expiry)}"></label>
 ${rgv.checked ? `<p class="small" style="margin:0"><b>Checked against the Environment Agency register on ${esc(rgv.checkedNice)}</b></p>
+${rgv.note === 'unreachable' ? `<p class="small" style="margin:0;color:#b00020">The last nightly check could not reach the register, so these details are from ${esc(rgv.checkedNice)}. We try again every night.</p>` : rgv.note === 'notfound' ? `<p class="small" style="margin:0;color:#b00020">The register no longer shows this number. These details are from ${esc(rgv.checkedNice)}. Please check it with the Environment Agency.</p>` : ''}
 <p class="small" style="margin:0">Registered name: ${esc(rgv.registerName)}<br>Tier: ${rgv.tier === 'lower' ? 'Lower' : 'Upper'}${rgv.company ? `<br>Company number: ${esc(rgv.company)}` : ''}${rgv.registeredNice ? `<br>Registered on: ${esc(rgv.registeredNice)}` : ''}<br>Expires on: ${esc(rgv.expiryNice)}</p>` : rgv.number ? '<p class="small" style="margin:0">Not checked against the register yet. Tap Save and check.</p>' : ''}
 <p class="small" style="margin:0">${rgv.lower ? 'Lower tier covers your own waste only, so no registered-carrier mark is shown on your videos.' : rgv.active ? `On every new video until ${esc(rgv.expiryNice)}: <b>${esc(rgv.text)}</b>` : rgv.expired ? `Expired on ${esc(rgv.expiryNice)}, so no mark is shown.` : 'No mark is shown until a registration number is saved.'}</p>
 <button type="submit">Save and check</button></form>
@@ -182,7 +183,7 @@ ${hasLogo ? '<form method="post" action="/settings/logo/reset"><button class="se
 <h2>Terms, privacy and the Pledge</h2>
 <form class="card" method="post" action="/settings/accept"><input type="hidden" name="back" value="/settings">
 ${lg.map(d => `<div style="margin:0 0 10px"><b>${esc(d.title)}</b> <span class="small">(version ${d.version})</span>
-${d.lines ? `<ol class="small" style="margin:6px 0 6px 18px;padding:0">${d.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ol>` : `<br><a class="small" href="${esc(d.url)}" target="_blank" rel="noopener">Read the ${esc(d.title.toLowerCase())}</a>`}
+${d.lines ? `<ol class="small" style="margin:6px 0 6px 18px;padding:0">${d.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ol>` : ''}<a class="small" href="${esc(d.url)}" target="_blank" rel="noopener">Read the ${esc(d.title.toLowerCase())}${d.lines ? ' on its own page' : ''}</a>
 ${d.accepted ? `<br><span class="small">Accepted${d.acceptedNice ? ` on ${esc(d.acceptedNice)}` : ''}.</span>` : `<label class="small" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="checkbox" name="doc" value="${d.key}" style="width:auto;margin-top:2px"> <span>I accept ${esc(d.short)}${d.changed ? ' (new version)' : ''}</span></label>`}</div>`).join('')}
 ${lg.every(d => d.accepted) ? '<p class="small" style="margin:0">All accepted. We keep a record of who accepted which version, and when.</p>' : '<button type="submit">Accept</button>'}</form>` : ''}
 <h2>Change password</h2>
@@ -247,6 +248,11 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
     } catch (err) { next(err); }
   }));
   app.post('/settings/logo/reset', sameOrigin, needUser(), needOwner, form, (req, res) => { logo.clear(); res.redirect(303, '/settings?m=logoreset'); });
+
+  // the wording of the three documents, public (shared videos are public too, and people read these before they sign up)
+  const mdHtml = require('./lib/md');
+  for (const k of ['terms', 'privacy', 'pledge']) app.get('/' + k, (req, res) => { const d = legalMod.docs[k];
+    res.set('Cache-Control', 'no-cache').send(page(d.title, `${mdHtml(d.body)}<p class="small">${esc(SKIN.name)} · version ${d.version}</p><p><a class="btn sec" href="/">Back to the app</a></p>`)); });
 
   // Terms, privacy and the Pledge: the owner ticks; we keep who accepted which version, and when. Used by Settings and by the banner on Home.
   app.post('/settings/accept', sameOrigin, needUser(), needOwner, express.urlencoded({ extended: false, limit: '10kb' }), async (req, res, next) => { try {

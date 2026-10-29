@@ -45,6 +45,22 @@ async function initDb(tries = 30) {
 }
 const events = (type, userId = null, jobId = null, detail = '') => pool.query('INSERT INTO events (type,user_id,job_id,detail) VALUES ($1,$2,$3,$4)', [type, userId, jobId, String(detail).slice(0, 300)]).catch(() => {});
 
+// Nightly: re-check the stored waste carrier registration against the Environment Agency register (after 03:00 UK time, once a day; retried hourly if the register can't be reached).
+function startNightlyRegCheck() {
+  const regMod = require('./lib/reg')(pool, SKIN), today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const hour = () => +new Date().toLocaleString('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Europe/London' });
+  const tick = async () => {
+    try {
+      if (hour() < 3) return;
+      const ran = (await pool.query("SELECT value FROM settings WHERE key='reg_recheck_run'")).rows[0];
+      if (ran && ran.value === today()) return;
+      const r = await regMod.recheck();
+      if (r.status === 'none' || r.status === 'found' || r.status === 'notfound') await pool.query("INSERT INTO settings (key,value) VALUES ('reg_recheck_run',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [today()]);
+      events('registration_recheck', null, null, r.status + (r.changed ? ' changed' : ''));
+    } catch (e) { console.error('registration re-check failed:', e.message); }
+  };
+  setTimeout(tick, 60 * 1000).unref(); setInterval(tick, 60 * 60 * 1000).unref();
+}
 app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id, crew_can_capture: SKIN.crew_can_capture, crew_enabled: SKIN.crew_enabled, commit: require('./lib/build').commit }));
 
 // ---------- the client's brand: logo, icons, manifest ----------
@@ -152,5 +168,6 @@ initDb()
   .then(() => jobsMod.init())
   .then(() => shareMod.init())
   .then(() => renderMod.init())
+  .then(() => { startNightlyRegCheck(); })
   .then(() => app.listen(PORT, () => console.log(`${SKIN.name} (Snap Lite) on port ${PORT}`)))
   .catch(e => { console.error(e); process.exit(1); });

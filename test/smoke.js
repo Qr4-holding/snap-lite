@@ -945,7 +945,7 @@ async function phaseRegServer() {
     // 3. Home warning from 60 days before expiry
     await hook('CBDU123456', day(30), 'upper');
     let home = (await req(owner, 'GET', '/')).text;
-    ok('Home warns the owner 30 days before expiry, in plain words', home.includes(`Your waste carrier registration expires on ${nice(day(30))}.`) && /Renew it and update the date in <a href="\/settings">Settings<\/a>\./.test(home));
+    ok('Home warns the owner 30 days before expiry, in plain words', home.includes(`Your waste carrier registration expires on ${nice(day(30))}.`) && /Renew it, then tap Save and check in <a href="\/settings">Settings<\/a>\./.test(home));
     await hook('CBDU123456', day(90), 'upper');
     ok('no warning 90 days before expiry', !/waste carrier registration/i.test((await req(owner, 'GET', '/')).text));
     if (crew) { await hook('CBDU123456', day(10), 'upper'); ok('crew never see the warning', !/waste carrier registration/i.test((await req(crew, 'GET', '/')).text)); }
@@ -1017,6 +1017,15 @@ async function phaseIntake1() {
   const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 2 } } });
   ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 2 && D2.privacy.version === 1);
   if (process.env.LOCAL_DATABASE_URL) await legalDb();
+  // the three pages are served by the app itself, to anyone, with no sign-in
+  for (const k of ['terms', 'privacy', 'pledge']) {
+    const r = await req(person(), 'GET', '/' + k);
+    ok(`/${k} is public and shows the wording with its version`, r.status === 200 && /version \d+/.test(r.text) && /<h1>/.test(r.text) && !/cleanupsnap\.co\.uk\/(terms|privacy)/.test(r.text));
+  }
+  const tp = (await req(person(), 'GET', '/terms')).text, pp = (await req(person(), 'GET', '/privacy')).text, pg = (await req(person(), 'GET', '/pledge')).text;
+  ok('terms: registered carriers, licensed sites, platform ban, anonymised data for research', /registered/i.test(tp) && /licensed or permitted/.test(tp) && /end your place/.test(tp) && /anonymised, combined information/.test(tp));
+  ok('privacy: what we store, videos public once shared, UK GDPR rights', /What we store/.test(pp) && /Videos are public once shared/.test(pp) && /UK GDPR/.test(pp));
+  ok('pledge: the five lines', (pg.match(/<li>/g) || []).length === 5 && /I never fly-tip, and I report fly-tipping I find\./.test(pg));
 }
 // versions and "who accepted what, when" need a real database: runs only when LOCAL_DATABASE_URL points at a throw-away one
 async function legalDb() {
@@ -1037,7 +1046,26 @@ async function legalDb() {
     await v2.accept(u, ['terms']);
     ok('db: accepting version 2 keeps the version 1 record too', (await pool.query("SELECT count(*)::int n FROM acceptances WHERE doc='terms'")).rows[0].n === 2 && (await v2.pending(1)).length === 1);
     ok('db: another person has accepted nothing', (await v2.pending(2)).length === 3);
-  } finally { await pool.query('DROP TABLE IF EXISTS acceptances'); await pool.end(); }
+    // nightly re-check, with a made-up register
+    const R = require('../lib/reg');
+    await pool.query('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'); await pool.query("DELETE FROM settings");
+    const reg = R(pool, {}), at = new Date('2026-11-01T12:00:00Z');
+    ok('db: re-check with no stored number does nothing', (await reg.recheck({ lookup: async () => { throw new Error('no'); } })).status === 'none');
+    const found = (exp, tier) => async n => ({ status: 'found', number: n, name: 'A B Ltd', tier, company: '123', registered: '2024-01-01', expiry: exp });
+    await reg.save({ number: 'CBDU527134' }, { lookup: found('2027-03-17', 'upper'), now: new Date('2026-10-29T12:00:00Z') });
+    const r1 = await reg.recheck({ lookup: found('2028-03-17', 'upper'), now: at });
+    const g1 = await reg.get(at);
+    ok('db: a renewed expiry is picked up and the check date moves on', r1.status === 'found' && r1.changed && g1.expiry === '2028-03-17' && g1.checked === '2026-11-01');
+    const r2 = await reg.recheck({ lookup: async n => ({ status: 'unreachable', number: n }), now: new Date('2026-11-02T12:00:00Z') });
+    const g2 = await reg.get(at);
+    ok('db: register unreachable keeps the last good result and its date, with a note', r2.status === 'unreachable' && g2.expiry === '2028-03-17' && g2.checked === '2026-11-01' && g2.note === 'unreachable');
+    const r3 = await reg.recheck({ lookup: async n => ({ status: 'notfound', number: n }), now: new Date('2026-11-03T12:00:00Z') });
+    const g3 = await reg.get(at);
+    ok('db: no longer on the register keeps the last good result and says so', r3.status === 'notfound' && g3.expiry === '2028-03-17' && g3.note === 'notfound');
+    await reg.recheck({ lookup: found('2028-03-17', 'lower'), now: new Date('2026-11-04T12:00:00Z') });
+    const g4 = await reg.get(at);
+    ok('db: a good answer clears the note, and a change to lower tier is picked up', g4.note === '' && g4.tier === 'lower' && !g4.active);
+  } finally { await pool.query('DROP TABLE IF EXISTS acceptances'); await pool.query('DROP TABLE IF EXISTS settings'); await pool.end(); }
 }
 
 async function phaseIntake1Server() {
@@ -1101,6 +1129,16 @@ async function phaseIntake1Server() {
     await req(owner, 'POST', '/settings/logo/reset', { body: '' });
     const back = Buffer.from(await (await fetch(BASE + '/assets/logo.png')).arrayBuffer());
     ok('the standard logo comes back', back.equals(std));
+    // the banner and Settings link to the app's own pages
+    const hb = (await req(owner, 'GET', '/')).text, sb = (await req(owner, 'GET', '/settings')).text;
+    ok('the tick banner links to /terms, /privacy and /pledge', ['/terms', '/privacy', '/pledge'].every(u => hb.includes(`href="${u}"`)));
+    ok('Settings links to the same pages', ['/terms', '/privacy', '/pledge'].every(u => sb.includes(`href="${u}"`)));
+    // nightly re-check (run now): a stale or wrong stored result is corrected from the register, keeping the number
+    await req(admin(), 'POST', '/admin/test-registration', { body: form({ name: 'Old Name', number: 'CBDU527134', expiry: '2026-12-01', tier: 'lower', checked: '2026-01-01' }) });
+    const rc = await req(admin(), 'POST', '/admin/recheck-registration', { body: '' });
+    const sr = (await req(owner, 'GET', '/settings')).text;
+    ok('the re-check corrects expiry and tier from the register and moves the checked date', rc.json().status === 'found' && /Expires on: 17 March 2027/.test(sr) && /Tier: Upper/.test(sr) && sr.includes(`Checked against the Environment Agency register on ${nice(today)}`));
+    await req(owner, 'POST', '/settings/registration/reset', { body: '' });
     // acceptances and the banner
     const h0 = (await req(owner, 'GET', '/')).text;
     ok('Home shows one banner asking for the three ticks', /Please accept when you have a minute/.test(h0) && (h0.match(/name="doc"/g) || []).length === 3);
