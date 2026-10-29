@@ -5,10 +5,17 @@ const express = require('express');
 const { clean, esc, slugify, EMAIL, hashPw, checkPw, cookies, sameOrigin, limited } = require('./lib/util');
 
 const regFor = require('./lib/reg');
+const profileFor = require('./lib/profile');
+const legalFor = require('./lib/legal');
+const logoMod = require('./lib/logo');
+const multer = require('multer');
+const sharp = require('sharp');
 module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const { page, msg } = ui;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const SESSION_DAYS = 180;
+  const profileMod = profileFor(pool), legalMod = legalFor(pool, SKIN), logo = logoMod(SKIN);
+  const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 4 } });
   const TEST_DOMAIN = '@snaplite-test.invalid';
 
   async function init() {
@@ -26,6 +33,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
       token TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, biz_id INT NOT NULL, expires TIMESTAMPTZ NOT NULL)`);
     await pool.query('ALTER TABLE biz_sessions ADD COLUMN IF NOT EXISTS user_id INT');
     await pool.query('DELETE FROM biz_sessions WHERE expires < now()');
+    await legalMod.init();
   }
 
   // ---------- sessions ----------
@@ -131,28 +139,52 @@ ${joinBlock()}`);
   app.post('/logout', sameOrigin, (req, res) => { signOut(req, res); res.redirect(303, '/login?m=bye'); });
 
   // ---------- settings ----------
-  app.get('/settings', needUser(), async (req, res, next) => { try {
+  async function settingsHtml(req, over = {}) {
     const u = req.user;
     const crew = u.role === 'owner' ? (await pool.query(`SELECT id,email,name,created_at FROM users WHERE biz_id=$1 AND role='crew' AND deleted_at IS NULL ORDER BY id`, [u.biz_id])).rows : [];
     const people = u.role === 'owner' ? (await pool.query(`SELECT id,email,role FROM users WHERE biz_id=$1 AND id<>$2 AND deleted_at IS NULL ORDER BY id`, [u.biz_id, u.id])).rows : [];
     const rgv = u.role === 'owner' ? await regFor(pool, SKIN).get() : null;
-    const q = req.query, flash = { invited: '', keys: 'Keys saved.', reg: 'Registration details saved.', regpart: 'Saved. The mark only shows on videos when both the registration number and the expiry date are filled in.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: the registration number should be letters and numbers only, for example CBDU123456, and the expiry must be a real date.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
+    const prof = u.role === 'owner' ? await profileMod.get() : null, lg = u.role === 'owner' ? await legalMod.status(u.id) : null, hasLogo = logo.custom();
+    const q = req.query, flash = over.flash != null ? over.flash : { invited: '', keys: 'Keys saved.', reg: 'Checked against the Environment Agency register and saved.', reglower: 'Saved. This is a lower tier registration, which covers your own waste only, so the registered-carrier mark is left off your videos.', regnone: "Not saved: that number isn't on the Environment Agency register. Check it against your registration certificate and try again.", regoffline: "Saved, but we couldn't reach the Environment Agency register just now, so it hasn't been checked. Tap Check again in a few minutes.", regcleared: 'Registration removed. No mark is shown on your videos.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: a registration number is letters then numbers, for example CBDU123456, and an expiry date must be a real date.', bizsaved: 'Business details saved.', logook: 'Logo saved. It is used on videos you make from now on.', logoreset: 'Standard logo put back.', logobad: "That file couldn't be read as a picture. Use a PNG or JPG.", accepted: 'Thank you. Your acceptance is saved.', acceptnone: 'Tick the box next to each one you accept, then tap Accept.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
-    res.set('Cache-Control', 'no-store').send(page('Settings', `
-<h1>Settings</h1>${msg(flash, /^(bad|dup|badpw|regbad)$/.test(q.m || ''))}${invited}
+    return page('Settings', `
+<h1>Settings</h1>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone)$/.test(q.m || ''))}${invited}
 <p>Signed in as <b>${esc(u.email)}</b> (${u.role}).</p>
 ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
 <form class="card" method="post" action="/settings/invite"><label class="f">Crew email<input name="email" type="email" required inputmode="email"></label><button type="submit">Create crew login</button><span class="small">Crew can take photos and make videos. Only you can approve and share.</span></form>` : ''}
 ${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div class="jobs">${people.map(c => `<div class="card"><b>${esc(c.email)}</b> <span class="small">(${c.role})</span><form method="post" action="/settings/users/${c.id}/reset" onsubmit="return confirm('Reset this password? They will be signed out.')"><button class="sec small" type="submit">Reset password</button></form></div>`).join('')}</div>` : ''}
 ${rgv ? `<h2>Waste carrier registration</h2>
-<form class="card" method="post" action="/settings/registration"><p class="small" style="margin:0">Shown as a small mark on every new video and on the end card, while the registration is current. It comes off the day after the expiry date. Videos already made are not changed.</p>
-<label class="f">Name on the registration<input name="name" maxlength="100" value="${esc(rgv.rawName || '')}" placeholder="${esc(SKIN.short_name || SKIN.name)}"></label>
+<form class="card" method="post" action="/settings/registration"><p class="small" style="margin:0">Type your registration number. We check it against the Environment Agency register and fill in the rest. While it is current, a small mark shows on every new video and on the end card. It comes off the day after the expiry date. Videos already made are not changed.</p>
 <label class="f">Registration number<input name="number" maxlength="20" autocapitalize="characters" value="${esc(rgv.number)}" placeholder="CBDU123456"></label>
-<label class="f">Expiry date<input name="expiry" type="date" value="${esc(rgv.expiry)}"></label>
-<p class="small" style="margin:0">${rgv.active ? `On every new video until ${esc(rgv.expiryNice)}: <b>${esc(rgv.text)}</b>` : rgv.expired ? `Expired on ${esc(rgv.expiryNice)}, so no mark is shown.` : 'No mark is shown until the number and the expiry date are both filled in.'}</p>
-<button type="submit">Save registration</button></form>
-${rgv.overridden ? '<form method="post" action="/settings/registration/reset"><button class="sec" type="submit">Put back the standard details</button></form>' : ''}` : ''}
+<label class="f">Expiry date <span class="small">(filled in from the register; only type it if the register can't be reached)</span><input name="expiry" type="date" value="${esc(rgv.expiry)}"></label>
+${rgv.checked ? `<p class="small" style="margin:0"><b>Checked against the Environment Agency register on ${esc(rgv.checkedNice)}</b></p>
+<p class="small" style="margin:0">Registered name: ${esc(rgv.registerName)}<br>Tier: ${rgv.tier === 'lower' ? 'Lower' : 'Upper'}${rgv.company ? `<br>Company number: ${esc(rgv.company)}` : ''}${rgv.registeredNice ? `<br>Registered on: ${esc(rgv.registeredNice)}` : ''}<br>Expires on: ${esc(rgv.expiryNice)}</p>` : rgv.number ? '<p class="small" style="margin:0">Not checked against the register yet. Tap Save and check.</p>' : ''}
+<p class="small" style="margin:0">${rgv.lower ? 'Lower tier covers your own waste only, so no registered-carrier mark is shown on your videos.' : rgv.active ? `On every new video until ${esc(rgv.expiryNice)}: <b>${esc(rgv.text)}</b>` : rgv.expired ? `Expired on ${esc(rgv.expiryNice)}, so no mark is shown.` : 'No mark is shown until a registration number is saved.'}</p>
+<button type="submit">Save and check</button></form>
+${rgv.overridden ? '<form method="post" action="/settings/registration/reset"><button class="sec" type="submit">Put back the standard details</button></form>' : ''}
+<h2>Your business</h2>
+<form class="card" method="post" action="/settings/business"><p class="small" style="margin:0">Only you can see and change these. Everything here is optional.</p>
+${(() => { const v = over.values || {}, pr = over.problems || [], er = f => { const x = pr.find(p => p.field === f); return x ? `<span class="small" style="color:#b00020">${esc(x.why)}</span>` : ''; };
+const val = (k, d) => esc(v[k] != null ? v[k] : d);
+return `<label class="f">Trading name <span class="small">(what customers know you as; used in the mark on your videos)</span><input name="trading" maxlength="100" value="${val('trading', rgv.trading || '')}" placeholder="${esc(rgv.registerName || SKIN.short_name || SKIN.name)}"></label>
+<label class="f">Mobile number <span class="small">(where quote enquiries go)</span><input name="mobile" type="tel" inputmode="tel" maxlength="20" value="${val('mobile', prof.mobileNice)}" placeholder="07700 900123">${er('mobile')}</label>
+<label class="f">Base town or area <span class="small">(where you work from)</span><input name="area" maxlength="60" value="${val('area', prof.area)}">${er('area')}</label>
+<label class="f">Van registration(s) <span class="small">(one per line)</span><textarea name="vans" rows="3" autocapitalize="characters" placeholder="AB12 CDE">${val('vans', prof.vans.map(x => require('./lib/profile').platePretty(x)).join('\n'))}</textarea>${er('vans')}</label>
+<label class="f">Public liability insurance: insurer <span class="small">(optional; you tell us, we don't check it)</span><input name="ins_name" maxlength="100" value="${val('ins_name', prof.ins_name)}"></label>
+<label class="f">Insurance expiry date<input name="ins_expiry" type="date" value="${val('ins_expiry', prof.ins_expiry)}">${er('insurance')}</label>`; })()}
+<p class="small" style="margin:0">${prof.insured ? `On your profile: <b>${esc(prof.insuranceLine)}</b>. It is never put on your videos.` : 'Insurance is only shown on your profile while the expiry date is in the future, and never on your videos.'}</p>
+<button type="submit">Save business details</button></form>
+<h2>Logo</h2>
+<form class="card" method="post" action="/settings/logo" enctype="multipart/form-data"><img src="/assets/logo.png?v=${esc(logo.version())}" alt="Your logo" style="max-height:80px;max-width:60%;background:#fff;border-radius:8px;padding:6px"><p class="small" style="margin:0">Used on your videos from now on. Videos already made are not changed. A PNG with a clear background looks best.</p>
+<label class="f">Choose a picture (PNG or JPG)<input name="logo" type="file" accept="image/png,image/jpeg" required></label><button type="submit">Save logo</button></form>
+${hasLogo ? '<form method="post" action="/settings/logo/reset"><button class="sec" type="submit">Put back the standard logo</button></form>' : ''}
+<h2>Terms, privacy and the Pledge</h2>
+<form class="card" method="post" action="/settings/accept"><input type="hidden" name="back" value="/settings">
+${lg.map(d => `<div style="margin:0 0 10px"><b>${esc(d.title)}</b> <span class="small">(version ${d.version})</span>
+${d.lines ? `<ol class="small" style="margin:6px 0 6px 18px;padding:0">${d.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ol>` : `<br><a class="small" href="${esc(d.url)}" target="_blank" rel="noopener">Read the ${esc(d.title.toLowerCase())}</a>`}
+${d.accepted ? `<br><span class="small">Accepted${d.acceptedNice ? ` on ${esc(d.acceptedNice)}` : ''}.</span>` : `<label class="small" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="checkbox" name="doc" value="${d.key}" style="width:auto;margin-top:2px"> <span>I accept ${esc(d.short)}${d.changed ? ' (new version)' : ''}</span></label>`}</div>`).join('')}
+${lg.every(d => d.accepted) ? '<p class="small" style="margin:0">All accepted. We keep a record of who accepted which version, and when.</p>' : '<button type="submit">Accept</button>'}</form>` : ''}
 <h2>Change password</h2>
 <form class="card" method="post" action="/settings/password"><label class="f">Current password<input name="current" type="password" required autocomplete="current-password"></label><label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>
 ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are switched on here. Sign in with the admin login.</p><p><a class="btn sec" href="/admin">Voice and writing keys</a></p>` : ''}
@@ -160,8 +192,9 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
 <h2>App</h2><p class="small">Version <span id="v">${esc(process.env.APP_VERSION || 'dev')}</span></p>
 <form method="post" action="/logout"><button class="sec" type="submit">Sign out</button></form>
 <h2>Delete my account</h2>
-<form class="card" method="post" action="/settings/delete-account" onsubmit="return confirm('Delete your account? Your jobs stay with ${esc(SKIN.name)}.')"><p class="small" style="margin:0">This removes your login. The jobs you made stay on the business record.</p><label class="f">Your password<input name="password" type="password" required autocomplete="current-password"></label><button class="bad" type="submit">Delete my account</button></form>`, { user: u }));
-  } catch (e) { next(e); } });
+<form class="card" method="post" action="/settings/delete-account" onsubmit="return confirm('Delete your account? Your jobs stay with ${esc(SKIN.name)}.')"><p class="small" style="margin:0">This removes your login. The jobs you made stay on the business record.</p><label class="f">Your password<input name="password" type="password" required autocomplete="current-password"></label><button class="bad" type="submit">Delete my account</button></form>`, { user: u });
+  }
+  app.get('/settings', needUser(), async (req, res, next) => { try { res.set('Cache-Control', 'no-store').send(await settingsHtml(req)); } catch (e) { next(e); } });
 
   app.post('/settings/invite', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
     if (!SKIN.crew_enabled) return res.status(403).send('Crew logins are not used on this app.');
@@ -180,12 +213,46 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
     res.redirect(303, '/settings?m=removed');
   } catch (e) { next(e); } });
 
-  app.post('/settings/registration', sameOrigin, needOwner, form, async (req, res, next) => { try {
+  // registration: checked live against the Environment Agency register
+  const regSave = async (req, res, next) => { try {
     const r = await regFor(pool, SKIN).save(req.body || {});
-    res.redirect(303, '/settings?m=' + (!r.ok ? 'regbad' : r.complete ? 'reg' : 'regpart'));
-  } catch (e) { next(e); } });
-  app.post('/settings/registration/reset', sameOrigin, needOwner, form, async (req, res, next) => { try {
+    const m = { found: r.lower ? 'reglower' : 'reg', notfound: 'regnone', unreachable: 'regoffline', cleared: 'regcleared', badnumber: 'regbad', baddate: 'regbad' }[r.status] || 'regbad';
+    if (r.ok) events('registration_saved', req.user.id, null, r.status);
+    res.redirect(303, '/settings?m=' + m);
+  } catch (e) { next(e); } };
+  app.post('/settings/registration', sameOrigin, needUser(), needOwner, form, regSave);
+  app.post('/settings/registration/reset', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
     await regFor(pool, SKIN).reset(); res.redirect(303, '/settings?m=regreset');
+  } catch (e) { next(e); } });
+
+  // business details: trading name (kept with the registration), mobile, base town, vans, insurance
+  app.post('/settings/business', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
+    const b = req.body || {};
+    const r = await profileMod.save({ mobile: b.mobile, area: b.area, vans: b.vans, ins_name: b.ins_name, ins_expiry: b.ins_expiry });
+    if (!r.ok) {
+      const html = await settingsHtml({ ...req, query: {} }, { flash: 'Not saved. Please fix what is marked in red and tap Save again.', isBad: true, problems: r.problems, values: { trading: b.trading, mobile: b.mobile, area: b.area, vans: b.vans, ins_name: b.ins_name, ins_expiry: b.ins_expiry } });
+      return res.status(400).set('Cache-Control', 'no-store').send(html);
+    }
+    await regFor(pool, SKIN).saveTrading(b.trading);
+    res.redirect(303, '/settings?m=bizsaved');
+  } catch (e) { next(e); } });
+
+  // logo: any PNG or JPG, kept as a PNG no bigger than 1000px
+  app.post('/settings/logo', sameOrigin, needUser(), needOwner, (req, res, next) => logoUpload.single('logo')(req, res, async e => {
+    try {
+      if (e || !req.file) return res.redirect(303, '/settings?m=logobad');
+      let buf; try { buf = await sharp(req.file.buffer, { failOn: 'error' }).rotate().resize({ width: 1000, height: 1000, fit: 'inside', withoutEnlargement: true }).png().toBuffer(); } catch (err) { return res.redirect(303, '/settings?m=logobad'); }
+      logo.save(buf); events('logo_changed', req.user.id);
+      res.redirect(303, '/settings?m=logook');
+    } catch (err) { next(err); }
+  }));
+  app.post('/settings/logo/reset', sameOrigin, needUser(), needOwner, form, (req, res) => { logo.clear(); res.redirect(303, '/settings?m=logoreset'); });
+
+  // Terms, privacy and the Pledge: the owner ticks; we keep who accepted which version, and when. Used by Settings and by the banner on Home.
+  app.post('/settings/accept', sameOrigin, needUser(), needOwner, express.urlencoded({ extended: false, limit: '10kb' }), async (req, res, next) => { try {
+    const back = req.body && req.body.back === '/' ? '/' : '/settings', done = await legalMod.accept(req.user, req.body && req.body.doc);
+    if (done.length) events('accepted', req.user.id, null, done.join(','));
+    res.redirect(303, done.length ? (back === '/' ? '/?m=accepted' : '/settings?m=accepted') : (back === '/' ? '/?m=acceptnone' : '/settings?m=acceptnone'));
   } catch (e) { next(e); } });
   app.post('/settings/password', sameOrigin, needUser(), form, async (req, res, next) => { try {
     const row = (await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.user.id])).rows[0];
@@ -279,5 +346,5 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
 
   app.get('/api/version', (req, res) => res.set('Cache-Control', 'no-store').json({ version: process.env.APP_VERSION || 'dev', apk: process.env.ANDROID_APK_URL || '' }));
 
-  return { init, current, needUser, needOwner, createUser, ensureBusiness, softDelete, TEST_DOMAIN };
+  return { init, current, needUser, needOwner, legal: legalMod, profile: profileMod, logo, createUser, ensureBusiness, softDelete, TEST_DOMAIN };
 };

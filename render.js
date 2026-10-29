@@ -21,7 +21,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
     const cfg = {
       out: path.join(dir, 'video.tmp.mp4'), cover: path.join(dir, 'cover.tmp.jpg'), work: path.join(dir, 'work'),
       orientation: j.orientation || 'auto',
-      brand: { logo: SKIN.logoFile, accent: SKIN.accent, strap: SKIN.tagline || '', web: SKIN.web || '', phone: SKIN.phone || '', email: SKIN.email || '' },
+      brand: { logo: acct.logo.current(), accent: SKIN.accent, strap: SKIN.tagline || '', web: SKIN.web || '', phone: SKIN.phone || '', email: SKIN.email || '' },
       end_card: SKIN.end_card || { headline: '', button: '', hold_seconds: 5 },
       photos: ph.slice(0, 5).map(p => ({ kind: p.kind, src: path.join(dir, `${p.kind}${p.seq}.jpg`) })),
       voice: null, lines: []

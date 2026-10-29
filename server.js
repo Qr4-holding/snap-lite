@@ -48,7 +48,7 @@ const events = (type, userId = null, jobId = null, detail = '') => pool.query('I
 app.get('/health', (req, res) => res.json({ ok: true, skin: SKIN.id, crew_can_capture: SKIN.crew_can_capture, crew_enabled: SKIN.crew_enabled, commit: require('./lib/build').commit }));
 
 // ---------- the client's brand: logo, icons, manifest ----------
-app.get('/assets/logo.png', (req, res) => res.set('Cache-Control', 'public, max-age=3600').type('png').sendFile(SKIN.logoFile));
+app.get('/assets/logo.png', (req, res) => res.set('Cache-Control', 'public, max-age=60').type('png').sendFile(acct.logo.current()));
 const iconCache = new Map();
 async function icon(size, maskable) {
   const key = size + (maskable ? 'm' : '');

@@ -143,12 +143,20 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     res.set('Cache-Control', 'no-store').send(shell('Jobs', `<h1>All jobs</h1><table><tr><th>#</th><th>Type</th><th>By</th><th>State</th><th>Photos</th><th>Error</th></tr>${rows.map(r => `<tr><td>${r.id}</td><td>${esc(r.job_type)}</td><td>${esc(r.email || '')}</td><td>${esc(r.state)}</td><td>${r.photos}</td><td>${esc(r.render_error || '')}</td></tr>`).join('') || '<tr><td colspan="6">No jobs.</td></tr>'}</table>`));
   } catch (e) { next(e); } });
 
+  // Test hook, demo skin only: writes registration details exactly as given, without asking the register, so dates and tiers can be tested.
+  app.post('/admin/test-registration', auth, sameOrigin, form, async (req, res, next) => { try {
+    if (SKIN.id !== 'demo') return res.status(403).send('Test hook is for the demo only.');
+    const b = req.body || {}, put = (k, v) => pool.query('INSERT INTO settings (key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [k, String(v || '')]);
+    for (const [k, f] of [['reg_name', 'name'], ['reg_number', 'number'], ['reg_expiry', 'expiry'], ['reg_tier', 'tier'], ['reg_checked', 'checked']]) await put(k, b[f]);
+    res.json({ ok: true });
+  } catch (e) { next(e); } });
   app.post('/admin/purge-test', auth, sameOrigin, form, async (req, res, next) => { try {
     const ids = (await pool.query('SELECT id FROM users WHERE email LIKE $1', ['%' + acct.TEST_DOMAIN])).rows.map(r => r.id);
     if (ids.length) {
       const js = (await pool.query('SELECT id FROM jobs WHERE user_id = ANY($1)', [ids])).rows.map(r => r.id);
       for (const id of js) { await pool.query('DELETE FROM jobs WHERE id=$1', [id]); fs.rm(jobsMod.dirOf(id), { recursive: true, force: true }, () => {}); }
       await pool.query('DELETE FROM biz_sessions WHERE user_id = ANY($1)', [ids]);
+      await pool.query('DELETE FROM acceptances WHERE user_id = ANY($1)', [ids]).catch(() => {});
       await pool.query('DELETE FROM users WHERE id = ANY($1)', [ids]);
     }
     res.redirect(303, '/admin?m=purged');

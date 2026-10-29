@@ -819,7 +819,7 @@ async function engine() {
 
 // Standing rule: a test that changes a client's live settings (registration, keys, anything the owner can edit) runs on the demo only, never on a client's own app.
 async function onDemoOnly(what) {
-  let skin = ''; try { skin = (await (await fetch(BASE + '/health')).json()).skin; } catch (e) {}
+  let skin = ""; for (let t = 0; t < 3 && !skin; t++) { try { skin = (await (await fetch(BASE + "/health")).json()).skin; } catch (e) { await new Promise(r => setTimeout(r, 300)); } }   // retry: a long local step can leave the connection closed
   if (skin === 'demo') return true;
   console.log(`SKIP  ${what}: changes live settings, so it runs on the demo only (this app is "${skin || 'unknown'}")`);
   return false;
@@ -904,7 +904,7 @@ async function phaseReg() {
 }
 
 async function phaseRegServer() {
-  console.log('\n== Registration mark: Settings, Home warning and a remake ==');
+  console.log('\n== Registration mark: live register check, Settings, Home warning and a remake ==');
   if (!ADMIN_PW) return;
   if (!(await onDemoOnly('registration settings'))) return;
   const { spawnSync } = require('child_process'), os = require('os');
@@ -915,52 +915,209 @@ async function phaseRegServer() {
   let crew = null;
   if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `regcrew-${RUN}${TEST}` }) }); crew = (await login(`regcrew-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
   const ds = (await req(owner, 'GET', '/settings')).text;
-  const hasDefault = /On every new video until/.test(ds);
   ok('Settings shows the registration form to the owner', /Waste carrier registration/.test(ds) && /name="number"/.test(ds) && /type="date"/.test(ds));
   if (crew) ok('crew do not see the registration form or warning', !/Waste carrier registration/.test((await req(crew, 'GET', '/settings')).text) && !/waste carrier registration/i.test((await req(crew, 'GET', '/')).text));
-  const bad = await req(owner, 'POST', '/settings/registration', { body: form({ name: '', number: 'bad number!', expiry: '2027-03-17' }) });
-  ok('a malformed number is refused with a plain reason', bad.status === 303 && /m=regbad/.test(bad.loc) && /Not saved: the registration number/.test((await req(owner, 'GET', '/settings?m=regbad')).text));
-  const bd = await req(owner, 'POST', '/settings/registration', { body: form({ name: '', number: 'CBDU123456', expiry: '2027-02-30' }) });
-  ok('a date that is not real is refused', /m=regbad/.test(bd.loc));
-  const day = n => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); };
+  if (crew) ok('crew cannot save a registration', (await req(crew, 'POST', '/settings/registration', { body: form({ number: 'CBDU527134' }) })).status === 403);
+  const day = n => new Date(Date.now() + n * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const today = day(0);
   const nice = s => new Date(s + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
-  const setReg = (n, num, exp) => req(owner, 'POST', '/settings/registration', { body: form({ name: n, number: num, expiry: exp }) });
+  const hook = (num, exp, tier = '') => req(admin(), 'POST', '/admin/test-registration', { body: form({ name: 'Test Carrier Ltd', number: num, expiry: exp, tier, checked: today }) });   // writes without asking the register, so dates and tiers can be tested
   const frameOf = async (id, t) => { const f = path.join(os.tmpdir(), `reg-${RUN}-${id}.mp4`); const r = await fetch(`${BASE}/api/jobs/${id}/video`, { headers: { cookie: owner.cookie } }); fs.writeFileSync(f, Buffer.from(await r.arrayBuffer())); const o = spawnSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', f, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 }).stdout; fs.rmSync(f, { force: true }); return o; };
   const waitDone = async id => { for (let i = 0; i < 120; i += 3) { const s = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json(); if (s.state !== 'rendering') return s.state; await new Promise(r => setTimeout(r, 3000)); } return 'timeout'; };
   const diffBox = (a, b) => { const W = 1080, H = 1920; let n = 0; for (let y = H - 36 - 70; y < H - 30; y++) for (let x = 20; x < 1060; x++) { const i = (y * W + x) * 3; if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 40) n++; } return n; };
   try {
-    // Home warning from 60 days before expiry
-    await setReg('', 'CBDU123456', day(30));
+    // 1. the live check against the Environment Agency register (the real, public number of EKP11 is used because it is a known upper-tier entry)
+    const bad = await req(owner, 'POST', '/settings/registration', { body: form({ number: 'bad number!' }) });
+    ok('a malformed number is refused with a plain reason', bad.status === 303 && /m=regbad/.test(bad.loc) && /letters then numbers, for example CBDU123456/.test((await req(owner, 'GET', '/settings?m=regbad')).text));
+    const none = await req(owner, 'POST', '/settings/registration', { body: form({ number: 'CBDU000001' }) });
+    ok('a number that is not on the register is refused, nothing saved', /m=regnone/.test(none.loc) && /isn't on the Environment Agency register/.test((await req(owner, 'GET', '/settings?m=regnone')).text.replace(/&#39;/g, "'")) && !/Checked against the Environment Agency register/.test((await req(owner, 'GET', '/settings')).text));
+    const found = await req(owner, 'POST', '/settings/registration', { body: form({ number: 'cbdu 527134' }) });
+    ok('a real number is checked and saved (spaces and lower case accepted)', /m=reg(\b|$)/.test(found.loc + ' '), found.loc);
+    const s1 = (await req(owner, 'GET', '/settings')).text;
+    ok('Settings says it was checked against the register today', s1.includes(`Checked against the Environment Agency register on ${nice(today)}`));
+    ok('the register name, tier, company number and dates are filled in', /PAUL V\. CASTLE GROUP LIMITED/.test(s1) && /Tier: Upper/.test(s1) && /Company number: 07612563/.test(s1) && /Registered on: 17 March 2024/.test(s1) && /Expires on: 17 March 2027/.test(s1));
+    ok('the number is kept as CBDU527134', /value="CBDU527134"/.test(s1));
+    ok('a typed expiry is ignored when the register answers', (await req(owner, 'POST', '/settings/registration', { body: form({ number: 'CBDU527134', expiry: '2030-01-01' }) })).status === 303 && /Expires on: 17 March 2027/.test((await req(owner, 'GET', '/settings')).text));
+    // 2. lower tier: saved, mark withheld, plain note
+    await hook('CBDL123456', day(200), 'lower');
+    const sl = (await req(owner, 'GET', '/settings')).text;
+    ok('lower tier: Settings says it covers your own waste only and no mark shows', /Lower tier covers your own waste only/.test(sl) && /Tier: Lower/.test(sl) && !/On every new video until/.test(sl));
+    // 3. Home warning from 60 days before expiry
+    await hook('CBDU123456', day(30), 'upper');
     let home = (await req(owner, 'GET', '/')).text;
     ok('Home warns the owner 30 days before expiry, in plain words', home.includes(`Your waste carrier registration expires on ${nice(day(30))}.`) && /Renew it and update the date in <a href="\/settings">Settings<\/a>\./.test(home));
-    await setReg('', 'CBDU123456', day(90));
+    await hook('CBDU123456', day(90), 'upper');
     ok('no warning 90 days before expiry', !/waste carrier registration/i.test((await req(owner, 'GET', '/')).text));
-    if (crew) { await setReg('', 'CBDU123456', day(10)); ok('crew never see the warning', !/waste carrier registration/i.test((await req(crew, 'GET', '/')).text)); }
-    await setReg('', 'CBDU123456', day(-1));
+    if (crew) { await hook('CBDU123456', day(10), 'upper'); ok('crew never see the warning', !/waste carrier registration/i.test((await req(crew, 'GET', '/')).text)); }
+    await hook('CBDU123456', day(-1), 'upper');
     ok('the day after expiry the owner is told the mark is off', /expired on/.test((await req(owner, 'GET', '/')).text) && /Expired on/.test((await req(owner, 'GET', '/settings')).text));
-    const part = await setReg('', '', day(90));
-    ok('number or date missing: saved, with a note that no mark shows', /m=regpart/.test(part.loc) && /only shows on videos when both/.test((await req(owner, 'GET', '/settings?m=regpart')).text));
-    // a remake picks the mark up: valid -> render, expired -> remake (mark gone), valid again -> remake (mark back)
-    await setReg('', 'CBDU123456', day(90));
+    const clr = await req(owner, 'POST', '/settings/registration', { body: form({ number: '' }) });
+    ok('clearing the number turns the mark off, with a note', /m=regcleared/.test(clr.loc) && /No mark is shown until a registration number is saved/.test((await req(owner, 'GET', '/settings')).text));
+    ok('with no number the owner is asked once, in place, and can carry on', /Add your waste carrier registration number in <a href="\/settings">Settings<\/a>/.test((await req(owner, 'GET', '/')).text) && (!crew || !/Add your waste carrier registration number/.test((await req(crew, 'GET', '/')).text)));
+    // 4. a remake picks the mark up; a lower tier registration withholds it, and the video is still made
+    await hook('CBDU123456', day(90), 'upper');
     const id = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
     await upload(owner, id, 'before', 0, await jpeg(1200, 1600, { shade: 70 })); await upload(owner, id, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
     await req(owner, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'Thanks for watching.' }) });
     ok('a video renders with the mark on', await waitDone(id) === 'ready');
     const withMark = await frameOf(id, 1.5);
-    await setReg('', 'CBDU123456', day(-1));
-    ok('remake after the registration expired starts', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 200 && await waitDone(id) === 'ready');
+    await hook('CBDL123456', day(90), 'lower');
+    ok('remake with a lower tier registration still makes the video', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 200 && await waitDone(id) === 'ready');
     const noMark = await frameOf(id, 1.5);
-    ok('the remade video has no mark once expired', diffBox(withMark, noMark) > 400, 'pixels ' + diffBox(withMark, noMark));
-    await setReg('', 'CBDU123456', day(90));
-    ok('remake after the registration is current starts', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 200 && await waitDone(id) === 'ready');
+    ok('the lower tier video has no mark', diffBox(withMark, noMark) > 400, 'pixels ' + diffBox(withMark, noMark));
+    await hook('CBDU123456', day(90), 'upper');
+    ok('remake after an upper tier registration starts', (await req(owner, 'POST', `/api/jobs/${id}/remake`, { json: {}, ...A })).status === 200 && await waitDone(id) === 'ready');
     const back = await frameOf(id, 1.5);
     ok('a remake picks the mark up again', diffBox(noMark, back) > 400 && diffBox(withMark, back) < 400, `vs none ${diffBox(noMark, back)}, vs first ${diffBox(withMark, back)}`);
     await req(owner, 'DELETE', `/api/jobs/${id}`);
   } finally {
     const r = await req(owner, 'POST', '/settings/registration/reset', { body: '' });
     ok('the standard details are put back', r.status === 303 && /m=regreset/.test(r.loc));
-    const after = (await req(owner, 'GET', '/settings')).text;
-    ok('after the tests the skin standard is what is shown', hasDefault ? /On every new video until/.test(after) : /No mark is shown until/.test(after));
+    ok('after the tests no registration is left on the demo', /No mark is shown until a registration number is saved/.test((await req(owner, 'GET', '/settings')).text));
+  }
+}
+
+// ---------------------------------------------------------------- intake and compliance, item 1: pure checks (any skin) then Settings (demo only)
+async function phaseIntake1() {
+  console.log('\n== Intake 1: register lookup, mobile, vans, insurance, versions (no server) ==');
+  const ea = require('../lib/ea'), P = require('../lib/profile'), L = require('../lib/legal'), R = require('../lib/reg');
+  const fx = (tier, num = 'CBDU527134') => ({ items: [{ registrationNumber: num, notation: num, expiryDate: '2027-03-17', registrationDate: '2024-03-17', tier: { notation: tier, label: tier }, holder: { name: 'A B Clearance Ltd', companyNumber: '01234567' } }] });
+  const p1 = ea.parse(fx('upper'), 'CBDU527134');
+  ok('register data is read: name, tier, company, dates', p1 && p1.name === 'A B Clearance Ltd' && p1.tier === 'upper' && p1.company === '01234567' && p1.registered === '2024-03-17' && p1.expiry === '2027-03-17');
+  ok('a lower tier entry is read as lower', ea.parse(fx('lower', 'CBDL123456'), 'CBDL123456').tier === 'lower');
+  ok('an answer for a different number is not accepted', ea.parse(fx('upper', 'CBDU111111'), 'CBDU527134') === null);
+  const fake = (status, body) => async () => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+  ok('lookup: found', (await ea.lookup('cbdu 527134', { fetchImpl: fake(200, fx('upper')) })).status === 'found');
+  ok('lookup: not on the register (404)', (await ea.lookup('CBDU527134', { fetchImpl: fake(404, {}) })).status === 'notfound');
+  ok('lookup: register error (500) is "unreachable", not "not found"', (await ea.lookup('CBDU527134', { fetchImpl: fake(500, {}) })).status === 'unreachable');
+  ok('lookup: network failure is "unreachable"', (await ea.lookup('CBDU527134', { fetchImpl: async () => { throw new Error('boom'); } })).status === 'unreachable');
+  ok('lookup: a malformed number never reaches the register', (await ea.lookup('hello', { fetchImpl: async () => { throw new Error('should not be called'); } })).status === 'badnumber');
+  const ev = R.evaluate;
+  const up = ev({ number: 'CBDU527134', expiry: '2099-01-01', tier: 'upper', trading: 'Acme Clearance' }, 'Biz', new Date('2026-10-29T12:00:00Z'));
+  ok('the mark uses the trading name when there is one', up.active && up.text === 'Acme Clearance · Registered carrier · CBDU527134');
+  const lo = ev({ number: 'CBDL123456', expiry: '2099-01-01', tier: 'lower' }, 'Biz', new Date('2026-10-29T12:00:00Z'));
+  ok('lower tier: no mark, flagged as lower', !lo.active && lo.lower && lo.text === '' && lo.endText === '');
+  ok('a CBDL number counts as lower tier even if the tier is missing', ev({ number: 'CBDL123456', expiry: '2099-01-01' }, 'Biz').lower === true);
+  // mobile
+  ok('mobile: 07700 900123 is accepted', P.mobile('07700 900123') === '07700900123');
+  ok('mobile: +44 7700 900123 becomes 07700900123', P.mobile('+44 7700 900123') === '07700900123' && P.mobile('+447700900123') === '07700900123' && P.mobile('07700-900-123') === '07700900123');
+  ok('mobile: a landline is refused', P.mobile('0113 496 0000') === '' && P.mobile('01132 960 000') === '');
+  ok('mobile: too short, too long or letters are refused', P.mobile('0770090012') === '' && P.mobile('077009001234') === '' && P.mobile('07700 90012a') === '' && P.mobile('') === '');
+  // plates
+  ok('plate: current style AB12 CDE, spaces stripped, upper-cased', P.plate('ab12 cde') === 'AB12CDE' && P.plate('AB12CDE') === 'AB12CDE');
+  ok('plate: older prefix and suffix styles', P.plate('a123 bcd') === 'A123BCD' && P.plate('abc 123d') === 'ABC123D');
+  ok('plate: short private plates', P.plate('K1') === 'K1' && P.plate('1 dad') === '1DAD');
+  ok('plate: nonsense is refused', P.plate('hello world') === '' && P.plate('12345678') === '' && P.plate('AB12 CDEF') === '' && P.plate('') === '');
+  const many = P.plates('ab12 cde\nAB12CDE, k1; nonsense here');
+  ok('several plates in one box: repeats dropped, bad ones reported', many.good.join(',') === 'AB12CDE,K1' && many.bad.length === 1);
+  ok('plates are shown with the space (AB12 CDE)', P.platePretty('AB12CDE') === 'AB12 CDE' && P.platePretty('K1') === 'K1');
+  // versions
+  const D = L.docs({});
+  ok('the Pledge has the five standard lines and version 1 by default', D.pledge.lines.length === 5 && D.pledge.version === 1 && D.terms.version === 1 && D.privacy.version === 1);
+  const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 2 } } });
+  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 2 && D2.privacy.version === 1);
+  if (process.env.LOCAL_DATABASE_URL) await legalDb();
+}
+// versions and "who accepted what, when" need a real database: runs only when LOCAL_DATABASE_URL points at a throw-away one
+async function legalDb() {
+  const { Pool } = require('pg'), pool = new Pool({ connectionString: process.env.LOCAL_DATABASE_URL }), L = require('../lib/legal');
+  try {
+    await pool.query('DROP TABLE IF EXISTS acceptances');
+    const v1 = L(pool, {}), v2 = L(pool, { legal: { terms: { version: 2 } } });
+    await v1.init();
+    const u = { id: 1, email: 'o@x.test' };
+    ok('db: nothing accepted yet means three pending', (await v1.pending(1)).length === 3);
+    await v1.accept(u, ['terms', 'pledge', 'nonsense']);
+    const s = await v1.status(1);
+    ok('db: only the ticked documents are recorded; unknown names ignored', s.find(d => d.key === 'terms').accepted && s.find(d => d.key === 'pledge').accepted && !s.find(d => d.key === 'privacy').accepted);
+    ok('db: accepting again does not duplicate the record', (await v1.accept(u, ['terms']), (await pool.query("SELECT count(*)::int n FROM acceptances WHERE doc='terms'")).rows[0].n === 1));
+    ok('db: the record names who and which version', (await pool.query("SELECT email, version, accepted_at FROM acceptances WHERE doc='pledge'")).rows.some(r => r.email === 'o@x.test' && r.version === 1 && r.accepted_at));
+    const s2 = await v2.status(1);
+    ok('db: when terms go to version 2 they are pending again, marked as new', s2.find(d => d.key === 'terms').changed && !s2.find(d => d.key === 'terms').accepted && s2.find(d => d.key === 'pledge').accepted);
+    await v2.accept(u, ['terms']);
+    ok('db: accepting version 2 keeps the version 1 record too', (await pool.query("SELECT count(*)::int n FROM acceptances WHERE doc='terms'")).rows[0].n === 2 && (await v2.pending(1)).length === 1);
+    ok('db: another person has accepted nothing', (await v2.pending(2)).length === 3);
+  } finally { await pool.query('DROP TABLE IF EXISTS acceptances'); await pool.end(); }
+}
+
+async function phaseIntake1Server() {
+  console.log('\n== Intake 1: Settings (owner only), logo, banner and acceptances ==');
+  if (!ADMIN_PW) return;
+  if (!(await onDemoOnly('business details, logo and acceptances'))) return;
+  const email = `biz-${RUN}${TEST}`, pw = 'Biz-pass-' + RUN, today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Biz Test', email, password: pw }) });
+  const owner = (await login(email, pw)).p;
+  let crew = null;
+  if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `bizcrew-${RUN}${TEST}` }) }); crew = (await login(`bizcrew-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
+  const day = n => new Date(Date.now() + n * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const nice = s => new Date(s + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const save = o => req(owner, 'POST', '/settings/business', { body: form(o) });
+  const full = { trading: '', mobile: '', area: '', vans: '', ins_name: '', ins_expiry: '' };
+  try {
+    const s0 = (await req(owner, 'GET', '/settings')).text;
+    ok('owner sees business details, logo and the Pledge on Settings', /Your business/.test(s0) && /name="mobile"/.test(s0) && /name="vans"/.test(s0) && /type="file"/.test(s0) && /Clean Up UK Pledge/.test(s0));
+    if (crew) {
+      const sc = (await req(crew, 'GET', '/settings')).text;
+      ok('crew see none of it', !/Your business/.test(sc) && !/name="mobile"/.test(sc) && !/Pledge/.test(sc) && !/Waste carrier registration/.test(sc));
+      ok('crew cannot save business details, a logo or an acceptance', (await req(crew, 'POST', '/settings/business', { body: form(full) })).status === 403 && (await req(crew, 'POST', '/settings/accept', { body: form({ doc: 'terms' }) })).status === 403 && (await req(crew, 'POST', '/settings/logo/reset', { body: '' })).status === 403);
+    }
+    // business details
+    const good = await save({ ...full, trading: 'Acme Clearance', mobile: '+44 7700 900123', area: 'Leeds', vans: 'ab12 cde\nk1', ins_name: 'Zurich', ins_expiry: day(120) });
+    ok('good details are saved', good.status === 303 && /m=bizsaved/.test(good.loc), good.status + ' ' + good.loc);
+    const s1 = (await req(owner, 'GET', '/settings')).text;
+    ok('they come back as saved: mobile spaced, plates tidied, trading name kept', /value="07700 900123"/.test(s1) && /AB12 CDE\nK1/.test(s1) && /value="Acme Clearance"/.test(s1) && /value="Leeds"/.test(s1));
+    ok('current insurance shows as self-declared with its date, and never on the videos', s1.includes(`Insured (self-declared), expires ${nice(day(120))}`) && /never put on your videos/.test(s1));
+    const m1 = await save({ ...full, trading: 'Acme Clearance', mobile: '0113 496 0000', area: 'Leeds', vans: 'AB12 CDE' });
+    ok('a landline is refused in plain words, nothing changed', m1.status === 400 && /doesn't look like a UK mobile number|doesn&#39;t look like a UK mobile number/.test(m1.text));
+    ok('what was typed is kept in the form so it can be fixed', /value="0113 496 0000"/.test(m1.text));
+    ok('...and the saved number is still the old one', /value="07700 900123"/.test((await req(owner, 'GET', '/settings')).text));
+    const m2 = await save({ ...full, mobile: '07700 900123', vans: 'AB12 CDE\nnot a plate' });
+    ok('a bad plate is named, with what to do', m2.status === 400 && /not a plate/.test(m2.text) && /one per line/.test(m2.text));
+    const m3 = await save({ ...full, ins_expiry: day(10) });
+    ok('an insurance date without an insurer is asked for', m3.status === 400 && /name of the insurer/.test(m3.text));
+    const m4 = await save({ ...full, ins_name: 'Zurich', ins_expiry: '2026-02-30' });
+    ok('an insurance date that is not real is refused', m4.status === 400 && /not a real date/.test(m4.text));
+    await save({ ...full, mobile: '07700 900123', ins_name: 'Zurich', ins_expiry: day(-1) });
+    ok('expired insurance is not shown as current', !/Insured \(self-declared\)/.test((await req(owner, 'GET', '/settings')).text));
+    await save({ ...full, mobile: '07700 900123', ins_name: 'Zurich', ins_expiry: day(0) });
+    ok('insurance that expires today still counts', (await req(owner, 'GET', '/settings')).text.includes(`expires ${nice(day(0))}`));
+    await save(full);
+    const s2 = (await req(owner, 'GET', '/settings')).text;
+    ok('everything can be cleared again', !/value="07700 900123"/.test(s2) && /placeholder="AB12 CDE"><\/textarea>/.test(s2) && !/Insured \(self-declared\)/.test(s2));
+    // logo
+    const std = Buffer.from(await (await fetch(BASE + '/assets/logo.png')).arrayBuffer());
+    const png = await sharp({ create: { width: 300, height: 120, channels: 4, background: { r: 200, g: 20, b: 20, alpha: 1 } } }).png().toBuffer();
+    const up = async (buf, type, name) => { const fd = new FormData(); fd.append('logo', new Blob([buf], { type }), name); const r = await fetch(BASE + '/settings/logo', { method: 'POST', body: fd, headers: { cookie: owner.cookie, origin: BASE }, redirect: 'manual' }); return { status: r.status, loc: r.headers.get('location') || '' }; };
+    const bad = await up(Buffer.from('this is not a picture'), 'image/png', 'x.png');
+    ok('a file that is not a picture is refused in plain words', bad.status === 303 && /m=logobad/.test(bad.loc) && /couldn't be read as a picture|couldn&#39;t be read as a picture/.test((await req(owner, 'GET', '/settings?m=logobad')).text));
+    const lg = await up(png, 'image/png', 'logo.png');
+    ok('a PNG is accepted as the logo', lg.status === 303 && /m=logook/.test(lg.loc), lg.status + ' ' + lg.loc);
+    const now = await sharp(Buffer.from(await (await fetch(BASE + '/assets/logo.png')).arrayBuffer())).metadata();
+    ok('the app now serves the new logo', now.width === 300 && now.height === 120, now.width + 'x' + now.height);
+    const jpg = await up(await sharp({ create: { width: 2400, height: 1200, channels: 3, background: '#036' } }).jpeg().toBuffer(), 'image/jpeg', 'big.jpg');
+    const big = await sharp(Buffer.from(await (await fetch(BASE + '/assets/logo.png')).arrayBuffer())).metadata();
+    ok('a big JPG is accepted and kept at 1000 px or less', /m=logook/.test(jpg.loc) && big.width === 1000 && big.format === 'png', big.width + ' ' + big.format);
+    ok('Settings offers to put the standard logo back', /Put back the standard logo/.test((await req(owner, 'GET', '/settings')).text));
+    await req(owner, 'POST', '/settings/logo/reset', { body: '' });
+    const back = Buffer.from(await (await fetch(BASE + '/assets/logo.png')).arrayBuffer());
+    ok('the standard logo comes back', back.equals(std));
+    // acceptances and the banner
+    const h0 = (await req(owner, 'GET', '/')).text;
+    ok('Home shows one banner asking for the three ticks', /Please accept when you have a minute/.test(h0) && (h0.match(/name="doc"/g) || []).length === 3);
+    ok('...and it does not stop making a video: New job is still there', /href="\/new"/.test(h0) && (await req(owner, 'GET', '/new')).status === 200);
+    const none = await req(owner, 'POST', '/settings/accept', { body: form({ back: '/' }) });
+    ok('Accept with nothing ticked says to tick', /acceptnone/.test(none.loc) && /Tick the box/.test((await req(owner, 'GET', '/?m=acceptnone')).text));
+    await req(owner, 'POST', '/settings/accept', { body: 'back=%2F&doc=terms' });
+    const h1 = (await req(owner, 'GET', '/')).text;
+    ok('ticking only the Terms leaves the other two on the banner', (h1.match(/name="doc"/g) || []).length === 2 && !/value="terms"/.test(h1));
+    const s3 = (await req(owner, 'GET', '/settings')).text;
+    ok('Settings shows the Terms accepted with a date, not a tick box', s3.includes(`Accepted on ${(new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' })}`));
+    ok('the five Pledge lines are shown', /I am a registered waste carrier and will keep my registration current\./.test(s3) && /I accept that proven fly-tipping ends my place on Clean Up UK and CleanUpSnap\./.test(s3) && (s3.match(/<li>/g) || []).length === 5);
+    await req(owner, 'POST', '/settings/accept', { body: 'back=%2Fsettings&doc=privacy&doc=pledge' });
+    ok('after the last ticks the banner is gone and Settings says all accepted', !/Please accept when you have a minute/.test((await req(owner, 'GET', '/')).text) && /All accepted\./.test((await req(owner, 'GET', '/settings')).text));
+    ok('a stray back address cannot send the person elsewhere', !/evil/.test((await req(owner, 'POST', '/settings/accept', { body: 'back=https%3A%2F%2Fevil.example&doc=terms' })).loc));
+  } finally {
+    await save(full); await req(owner, 'POST', '/settings/logo/reset', { body: '' });
   }
 }
 
@@ -989,6 +1146,7 @@ async function phaseRegServer() {
     if (['adminback', 'all'].includes(which)) await phaseAdminBack();
     if (['reg', 'regengine', 'all'].includes(which)) await phaseReg();
     if (['reg', 'all'].includes(which)) await phaseRegServer();
+    if (['intake1', 'all'].includes(which)) { await phaseIntake1(); await phaseIntake1Server(); }
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }
