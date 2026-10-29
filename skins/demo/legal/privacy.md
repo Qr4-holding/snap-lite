@@ -1,4 +1,4 @@
-Version: 1
+Version: 2
 # Privacy notice
 
 *First draft, in plain English. To be reviewed before it is relied on.*
@@ -8,7 +8,7 @@ This explains what we keep about you and your jobs, and why.
 ## What we store
 - **Your account:** your email address, your name if you give it, and your password (kept scrambled, so we cannot read it).
 - **Your business:** registration number and the details we read from the Environment Agency public register, trading name, mobile number, base town, van registrations, insurer and expiry date (if you give them), and your logo.
-- **Each job:** photos, the town or area and postcode, the job type, what was collected (items, quantity, waste description and code), the customer's name if you add it, which van, tip receipt details, and the video we make.
+- **Each job:** photos, the collection address (town or area, postcode and the first line if you add it), the job type, what was collected (items, quantity, waste description and waste code), the customer's name and address if you add them, a business customer's name and SIC code, which van, the disposal site, the tip receipt photo and its details, and the video we make.
 - **Your acceptances:** which version of these documents you accepted, and when.
 
 ## Why we keep it
@@ -23,6 +23,7 @@ When you share a video, anyone with the link can see it, and it may be posted wh
 ## Who sees it
 - Only you (the owner) see your business details and job records. Crew see only what they need to take photos and make videos.
 - We use trusted services to run the app (hosting, voice and writing). They process data for us and do not use it for their own purposes.
+- **AI reading of photos.** To list what is in a load, estimate how much there is, and read tip receipts, we send your job photos and receipt photos to an AI service. We ask it only for that information. It is not used to identify people.
 - We do not sell your data. We may use anonymised, combined information for research and reporting, as set out in the Terms.
 
 ## How long

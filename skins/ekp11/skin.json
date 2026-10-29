@@ -48,5 +48,21 @@
   "reg_name": "EKP11 Property & Waste Management",
   "reg_number": "CBDU527134",
   "reg_expiry": "2027-03-17",
-  "trading_name": "EKP11 Property & Waste Management"
+  "trading_name": "EKP11 Property & Waste Management",
+  "ewc_by_type": {
+    "House clearance": "20 03 07",
+    "Garden": "20 02 01",
+    "Garage": "20 03 01",
+    "Builders' waste": "17 09 04",
+    "Cardboard and packaging": "15 01 01",
+    "Commercial yard": "20 03 01",
+    "Other": "20 03 01"
+  },
+  "usual_sites": [
+    {
+      "name": "Biffa – Armley Depot",
+      "address": "Unit C, Scotch Park Trading Estate, Leeds, LS12 2PY",
+      "licence": "JB3607UK"
+    }
+  ]
 }

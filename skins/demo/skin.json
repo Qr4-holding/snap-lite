@@ -49,5 +49,14 @@
   "join_text": "Want this for your business?",
   "join_button": "Find out more",
   "join_url": "https://cleanupsnap.co.uk",
-  "standard_line3": "Before and after, made easy."
+  "standard_line3": "Before and after, made easy.",
+  "ewc_by_type": {
+    "House clearance": "20 03 07",
+    "Garden": "20 02 01",
+    "Garage": "20 03 01",
+    "Builders' waste": "17 09 04",
+    "Cardboard and packaging": "15 01 01",
+    "Commercial yard": "20 03 01",
+    "Other": "20 03 01"
+  }
 }

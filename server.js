@@ -149,11 +149,13 @@ mailMod = require('./mail')(secrets, SKIN, acct.TEST_DOMAIN);
 let shareMod;
 const helpMod = require('./help')({ app, SKIN, ui, acct });
 const diagMod = require('./diag')({ app, pool, SKIN, ui, acct });
-const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, diag: diagMod, getShare: () => shareMod });
+let recordMod;
+const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, diag: diagMod, getShare: () => shareMod, getRecord: () => recordMod });
 shareMod = require('./share')({ app, pool, SKIN, ui, acct, jobsMod, events });
 const linesMod = require('./lines')(SKIN, secrets);
 let voiceMod, renderMod;
-renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod });
+renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod, getRecord: () => recordMod });
+recordMod = require('./record')({ app, pool, SKIN, ui, acct, jobsMod, events, secrets });
 voiceMod = require('./voice')({ app, pool, SKIN, ui, acct, jobsMod, getRender: () => renderMod, events, secrets, linesMod });
 const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets, mailMod, diagMod });
 

@@ -16,7 +16,8 @@ const MEDIA_DIR = process.env.MEDIA_DIR || '/data/media';
 const JOBS_DIR = path.join(MEDIA_DIR, 'jobs');
 const STATES = ['draft', 'rendering', 'ready', 'approved', 'shared', 'failed'];
 
-module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, diag }) {
+module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, getRecord, diag }) {
+  const REC = require('./lib/record');
   const { page, msg } = ui;
   const { needUser, needOwner } = acct;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
@@ -40,6 +41,11 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
       id SERIAL PRIMARY KEY, job_id INT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('before','during','after')),
       seq INT NOT NULL DEFAULT 0, file TEXT NOT NULL, width INT, height INT, taken_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (job_id, kind, seq))`);
     await pool.query("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS area TEXT NOT NULL DEFAULT ''");
+    // the per-job record (transfer note / Digital Waste Tracking fields). Every column is optional, so jobs made before these existed stay valid with blank record fields.
+    for (const c of ["postcode TEXT NOT NULL DEFAULT ''", "addr1 TEXT NOT NULL DEFAULT ''", "cust_name TEXT NOT NULL DEFAULT ''", "cust_addr TEXT NOT NULL DEFAULT ''", 'commercial BOOLEAN NOT NULL DEFAULT false',
+      "cust_business TEXT NOT NULL DEFAULT ''", "sic TEXT NOT NULL DEFAULT ''", "qty TEXT NOT NULL DEFAULT ''", "qty_est TEXT NOT NULL DEFAULT ''", "items JSONB", "flags JSONB", "waste_desc TEXT NOT NULL DEFAULT ''",
+      "ewc TEXT NOT NULL DEFAULT ''", "van TEXT NOT NULL DEFAULT ''", "tip_name TEXT NOT NULL DEFAULT ''", "tip_addr TEXT NOT NULL DEFAULT ''", "tip_licence TEXT NOT NULL DEFAULT ''", "tip_date TEXT NOT NULL DEFAULT ''",
+      "tip_ticket TEXT NOT NULL DEFAULT ''", 'has_receipt BOOLEAN NOT NULL DEFAULT false', 'analysed_at TIMESTAMPTZ', "analyse_note TEXT NOT NULL DEFAULT ''"]) await pool.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ' + c);
     await pool.query('CREATE INDEX IF NOT EXISTS jobs_biz_state ON jobs (biz_id, state, created_at DESC)');
     await pool.query(`CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY, user_id INT NOT NULL, platform TEXT, push_subscription JSONB, app_version TEXT, last_seen TIMESTAMPTZ DEFAULT now())`);
@@ -61,15 +67,20 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
   const dirOf = id => path.join(JOBS_DIR, String(id));
   // where the job was: free text for the list, the job page and the hub only. It is never spoken, never on the end card and never given to the lines.
   const cleanArea = v => clean(String(v || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' '), 80);
-  const hubFields = j => ({ slug: j.slug, job_type: j.job_type, area: j.area || '', created_at: j.created_at });   // what the hub post will carry
+  const hubFields = j => ({ slug: j.slug, job_type: j.job_type, area: j.area || '', postcode: j.postcode || '', created_at: j.created_at });   // what the hub post will carry
+  const prof = () => acct.profile;
   const newSlug = () => crypto.randomBytes(6).toString('hex');
 
   // ---------- create a job ----------
   app.post('/api/jobs', sameOrigin, needUser({ json: true }), capOk, express.json({ limit: '5kb' }), form, async (req, res, next) => { try {
     const b = req.body || {}, type = clean(b.job_type, 60);
     const job_type = SKIN.job_types.includes(type) ? type : (SKIN.job_types[0] || '');
-    const area = cleanArea(b.area);
-    const j = (await pool.query('INSERT INTO jobs (slug,biz_id,user_id,job_type,area) VALUES ($1,$2,$3,$4,$5) RETURNING id', [newSlug(), req.user.biz_id, req.user.id, job_type, area])).rows[0];
+    const area = cleanArea(b.area), rawPc = clean(b.postcode, 12), pc = REC.postcode(rawPc);
+    if (rawPc && !pc) { const m = "That postcode doesn't look right. It should look like LS12 2PY. You can leave it empty."; return /json/.test(req.get('accept') || '') && !/html/.test(req.get('accept') || '') ? res.status(400).json({ error: m }) : res.redirect(303, '/new?m=pc'); }
+    // which van: the only van, or the one used last time (pick another on the job record)
+    const vans = (await prof().get()).vans; let van = '';
+    if (vans.length === 1) van = vans[0]; else if (vans.length > 1) { const lv = (await pool.query('SELECT value FROM settings WHERE key=$1', ['lastvan:' + req.user.id])).rows[0]; van = lv && vans.includes(lv.value) ? lv.value : vans[0]; }
+    const j = (await pool.query('INSERT INTO jobs (slug,biz_id,user_id,job_type,area,postcode,van) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id', [newSlug(), req.user.biz_id, req.user.id, job_type, area, pc, van])).rows[0];
     await pool.query('INSERT INTO settings (key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', ['lastarea:' + req.user.id, area]).catch(() => {});
     events('job_created', req.user.id, j.id);
     if (/json/.test(req.get('accept') || '') && !/html/.test(req.get('accept') || '')) return res.status(201).json({ id: j.id });
@@ -193,7 +204,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     res.set('Cache-Control', 'no-store').send(page('Edit details', `
 <h1>Edit details</h1>
 <form class="card" method="post" action="/jobs/${j.id}/details"><label class="f">What was the job?<select name="job_type">${types.map(t => `<option${t === j.job_type ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
-<label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="${esc(j.area || '')}" placeholder="For example: Selby"></label>
+${req.query.m === 'pc' ? '<p class="msg bad" role="alert">That postcode doesn\'t look right. It should look like LS12 2PY. Nothing was saved.</p>' : ''}<div style="display:grid;grid-template-columns:3fr 2fr;gap:10px"><label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="${esc(j.area || '')}" placeholder="For example: Selby"></label><label class="f">Postcode <span class="small">(optional)</span><input name="postcode" maxlength="9" autocomplete="off" autocapitalize="characters" value="${esc(j.postcode || '')}" placeholder="LS12 2PY"></label></div>
 <p class="small" style="margin:0">These show on your job list and with the job when it is posted. They are not in the video, so nothing is remade and nothing needs approving again.</p>
 <button type="submit">Save details</button></form>
 <a class="btn sec" href="/jobs/${j.id}" style="margin-top:10px">Back to the job</a>`, { user: req.user }));
@@ -203,17 +214,19 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, di
     if (!mayEditDetails(req.user, j)) return { code: j ? 403 : 404, j };
     const b = req.body || {}, type = clean(b.job_type, 60);
     const job_type = SKIN.job_types.includes(type) || type === j.job_type ? type : j.job_type;
-    await pool.query('UPDATE jobs SET job_type=$2, area=$3 WHERE id=$1', [j.id, job_type, cleanArea(b.area)]);   // state, video and voice are left alone
+    const rawPc = clean(b.postcode, 12), pc = REC.postcode(rawPc);
+    if (rawPc && !pc) return { code: 422, j };                      // nothing is saved if the postcode is not one
+    await pool.query('UPDATE jobs SET job_type=$2, area=$3, postcode=$4 WHERE id=$1', [j.id, job_type, cleanArea(b.area), pc]);   // state, video and voice are left alone
     events('details_edited', req.user.id, j.id);
     return { code: 200, j };
   };
   app.post('/jobs/:id/details', sameOrigin, needUser(), form, async (req, res, next) => { try {
     const r = await saveDetails(req, res);
-    res.redirect(303, r.code === 200 ? `/jobs/${r.j.id}?m=saved` : (r.j ? `/jobs/${r.j.id}` : '/'));
+    res.redirect(303, r.code === 200 ? `/jobs/${r.j.id}?m=saved` : r.code === 422 ? `/jobs/${r.j.id}/edit?m=pc` : (r.j ? `/jobs/${r.j.id}` : '/'));
   } catch (e) { next(e); } });
   app.post('/api/jobs/:id/details', sameOrigin, needUser({ json: true }), express.json({ limit: '2kb' }), async (req, res, next) => { try {
     const r = await saveDetails(req, res);
-    res.status(r.code).json(r.code === 200 ? { ok: true } : { error: r.code === 404 ? "We can't find that job. Go back to Jobs and try again." : 'Only the owner can change the details of a job that has a video.' });
+    res.status(r.code).json(r.code === 200 ? { ok: true } : { error: r.code === 422 ? "That postcode doesn't look right. It should look like LS12 2PY." : r.code === 404 ? "We can't find that job. Go back to Jobs and try again." : 'Only the owner can change the details of a job that has a video.' });
   } catch (e) { next(e); } });
   app.post('/jobs/:id/approve', sameOrigin, needUser(), needOwner, async (req, res, next) => { try {
     const j = await getJob(req.user, req.params.id);
@@ -254,7 +267,7 @@ ${rows.length ? '' : `<p class="small" style="margin-top:18px">${u.role === 'own
     res.set('Cache-Control', 'no-store').send(page('New job', `
 <h1>New job</h1>
 <form class="card" method="post" action="/api/jobs"><label class="f">What was the job?<select name="job_type">${SKIN.job_types.map(t => `<option>${esc(t)}</option>`).join('')}</select></label>
-<label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="" placeholder="For example: Selby"></label>${last && last.value ? `<button type="button" class="chip" data-v="${esc(last.value)}" onclick="var i=document.querySelector('[name=area]');i.value=this.dataset.v;this.hidden=true;i.focus()">Use ${esc(last.value)} (last job)</button>` : ''}
+${req.query.m === 'pc' ? '<p class="msg bad" role="alert">That postcode doesn\'t look right. It should look like LS12 2PY. You can leave it empty.</p>' : ''}<div style="display:grid;grid-template-columns:3fr 2fr;gap:10px"><label class="f">Town or area (where the job was)<input name="area" maxlength="80" autocomplete="off" value="" placeholder="For example: Selby"></label><label class="f">Postcode <span class="small">(optional)</span><input name="postcode" maxlength="9" autocomplete="off" autocapitalize="characters" placeholder="LS12 2PY"></label></div>${last && last.value ? `<button type="button" class="chip" data-v="${esc(last.value)}" onclick="var i=document.querySelector('[name=area]');i.value=this.dataset.v;this.hidden=true;i.focus()">Use ${esc(last.value)} (last job)</button>` : ''}
 <button type="submit">Start: take the before photo</button></form>`, { user: req.user }));
   } catch (e) { next(e); } });
 
@@ -369,11 +382,13 @@ note();
     const fail = j.state === 'failed' ? `<p class="msg bad" role="alert">${errs.renderFailure(j.render_error, u.role, SKIN.name)}</p>` : '';
     const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
     const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
+    const rec = await getRecord().forJobPage(u, j, mayEditDetails(u, j));
     res.set('Cache-Control', 'no-store').send(page('Job', `
 <h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>${j.area ? `<p class="small" style="margin:0 0 8px">📍 ${esc(j.area)}</p>` : ''}
-${saved}${notStarted}${busy}${fail}${player}
+${saved}${notStarted}${busy}${fail}${rec.warn}${player}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve" style="margin-top:10px"><button type="submit">Approve</button></form>` : ''}
 ${sh ? sh.html : ''}
+${rec.card}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:12px">
 ${mine && hasBA && ['draft', 'failed'].includes(j.state) ? `<a class="btn" href="/jobs/${j.id}/voice">${j.state === 'failed' ? 'Try again' : 'Choose voice and make video'}</a>` : ''}

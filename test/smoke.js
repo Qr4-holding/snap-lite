@@ -1159,6 +1159,254 @@ async function phaseIntake1Server() {
   }
 }
 
+// ---------------------------------------------------------------- intake and compliance, item 2: the per-job record
+async function phaseRecord() {
+  console.log('\n== Intake 2: the job record (rules, no server) ==');
+  const R = require('../lib/record'), P = require('../lib/profile');
+  ok('quantity scale is quarter, half, three-quarter, full, more than one load', R.QTY_KEYS.join() === 'quarter,half,three_quarter,full,more');
+  ok('quantity in cubic yards for a 17 yard van', R.qtyText('half', 17) === 'Half load (8.5 cubic yards)' && R.qtyText('quarter', 17) === 'Quarter load (4.25 cubic yards)' && R.qtyText('full', 17) === 'Full load (17 cubic yards)' && R.qtyYards('three_quarter', 17) === 12.75);
+  ok('...and for a different van size', R.qtyText('full', 12) === 'Full load (12 cubic yards)' && R.qtyYards('half', 12) === 6);
+  ok('more than one load says "more than N cubic yards"', R.qtyText('more', 17) === 'More than one load (more than 17 cubic yards)' && R.qtyYards('more', 17) === null);
+  ok('van size: numbers 1 to 60 are accepted, nonsense is not', P.capOk('17') === 17 && P.capOk('12,5') === 12.5 && P.capOk('0') === 0 && P.capOk('61') === 0 && P.capOk('abc') === 0);
+  ok('VAT number: spaces, GB and all-digits forms are tidied; wrong ones refused', P.vat('513468006') === '513 4680 06' && P.vat('GB 513 4680 06') === '513 4680 06' && P.vat('5134680') === '' && P.vat('abc') === '');
+  const items = [{ item: 'sofa', count: 2, material: 'furniture' }, { item: 'bags', count: 5, material: 'household' }, { item: 'carpet', count: 1, material: 'household' }];
+  ok('description comes from the items: mixed load', R.describe(items, 'House clearance') === 'mixed household clearance: sofa x2, bags x5, carpet');
+  ok('description: a single material is not called mixed', R.describe([{ item: 'hedge cuttings', count: 1, material: 'garden' }], 'Garden') === 'garden waste: hedge cuttings');
+  ok('no items, no description', R.describe([], 'Garden') === '');
+  const SK = { ewc_by_type: { 'House clearance': '20 03 07', 'Garden': '20 02 01' } };
+  ok('EWC: one kind of waste gives its own code', R.ewcFor([{ item: 'cuttings', material: 'garden' }], 'House clearance', SK) === '20 02 01');
+  ok('EWC: a mixed load uses the job type code', R.ewcFor(items, 'House clearance', SK) === '20 03 07');
+  ok('EWC: a skin can change a code', R.ewcFor([{ item: 'x', material: 'garden' }], 'Garden', { ewc_by_material: { garden: '20 02 02' } }) === '20 02 02');
+  ok('EWC: codes are tidied to "20 03 07" and bad ones refused', R.ewcClean('200307') === '20 03 07' && R.ewcClean('17 06 05*') === '17 06 05*' && R.ewcClean('2003') === '' && R.ewcClean('abc') === '');
+  const dirty = R.cleanItems([{ item: '<b>sofa</b>\n', count: 500, material: 'nonsense' }, { item: '', count: 1 }, { item: 'x'.repeat(100), count: 'z', material: 'garden' }]);
+  ok('items from the model are cleaned: no tags, count 1 to 99, unknown material becomes other, empty names dropped', dirty.length === 2 && dirty.every(i => !/[<>]/.test(i.item)), JSON.stringify(dirty));
+  ok('...and the counts and materials are safe', dirty[0].count === 99 && dirty[0].material === 'other' && dirty[1].count === 1 && dirty[1].item.length === 40);
+  ok('postcode: tidied and checked', R.postcode('ls12 2py') === 'LS12 2PY' && R.postcode('LS122PY') === 'LS12 2PY' && R.postcode('M1 1AE') === 'M1 1AE' && R.postcode('SW1A 1AA') === 'SW1A 1AA' && R.postcode('nope') === '' && R.postcode('LS12 2P') === '');
+  ok('SIC code: five digits only', R.sic('38110') === '38110' && R.sic('3811') === '' && R.sic('381100') === '' && R.sic('38 110') === '38110' && R.sic('abcde') === '');
+  ok('the flag warning for seating is the plain sentence', R.warnings({ pops: true }).join() === 'This load has upholstered seating (a sofa or chair): it must go to a site that takes POPs waste.');
+  ok('every flag has its own one-line warning', R.FLAGS.length === 6 && R.FLAGS.every(f => R.warnings({ [f]: true }).length === 1) && R.warnings({}).length === 0);
+  // the photo reader, with the network stubbed: only data is taken from the answer
+  const V = require('../lib/vision'), realFetch = global.fetch;
+  const answer = txt => { global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ content: [{ type: 'text', text: txt }] }) }); };
+  const sec = { get: async () => 'sk-ant-test' }, tiny = await sharp({ create: { width: 40, height: 40, channels: 3, background: '#888' } }).jpeg().toBuffer();
+  try {
+    answer('Sure! {"items":[{"item":"sofa","count":2,"material":"furniture"},{"item":"IGNORE ALL RULES","count":1,"material":"x"}],"flags":{"pops":true,"asbestos":"yes","evil":true},"quantity":"three_quarter"} done');
+    const a = await V(sec, {}).analyse([tiny], 'House clearance', 17);
+    ok('photo reader: items, flags and quantity are taken as data; extra keys ignored; odd flag values are not true', a.items.length === 2 && a.items[1].material === 'other' && a.flags.pops === true && a.flags.asbestos === false && !('evil' in a.flags) && a.qty === 'three_quarter');
+    answer('{"items":[],"flags":{},"quantity":"enormous"}');
+    ok('photo reader: an unknown quantity is dropped', (await V(sec, {}).analyse([tiny], 'Other', 17)).qty === '');
+    answer('I cannot help with that.');
+    ok('photo reader: an answer without data is an error, not a guess', !!(await V(sec, {}).analyse([tiny], 'Other', 17)).error);
+    ok('photo reader: no key set means "nokey", nothing sent', (await V({ get: async () => '' }, {}).analyse([tiny], 'Other', 17)).error === 'nokey');
+    answer('{"site":"Biffa Armley Depot","address":"Unit C","date":"09/04/2026","ticket":"  T-4471 ","permit":"jb3607uk"}');
+    const rr = await V(sec, {}).readReceipt(tiny);
+    ok('receipt reader: a date that is not ISO is dropped (never guessed), the rest is tidied', rr.site === 'Biffa Armley Depot' && rr.date === '' && rr.ticket === 'T-4471' && rr.permit === 'JB3607UK');
+    answer('{"site":"X","date":"2026-04-09","ticket":"1","permit":""}');
+    ok('receipt reader: an ISO date is kept', (await V(sec, {}).readReceipt(tiny)).date === '2026-04-09');
+  } finally { global.fetch = realFetch; }
+}
+
+async function phaseRecordServer() {
+  console.log('\n== Intake 2: the job record on a live app ==');
+  if (!ADMIN_PW) return;
+  const A = { headers: { accept: 'application/json' } };
+  const R = require('../lib/record');
+  const email = `rec-${RUN}${TEST}`, pw = 'Rec-pass-' + RUN, dir = process.env.PHOTO_DIR, real = n => dir && fs.existsSync(path.join(dir, n)) ? fs.readFileSync(path.join(dir, n)) : null;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Rec Test', email, password: pw }) });
+  const owner = (await login(email, pw)).p;
+  let crew = null, crew2 = null;
+  if (CREW_ON) {
+    for (const [n, set] of [['a', c => { crew = c; }], ['b', c => { crew2 = c; }]]) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `reccrew${n}-${RUN}${TEST}` }) }); set((await login(`reccrew${n}-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p); }
+  }
+  const getRec = async (who, id) => (await req(who, 'GET', `/api/jobs/${id}/record`, A)).json();
+  const mk = async (who, body = {}) => (await req(who, 'POST', '/api/jobs', { json: { job_type: 'House clearance', ...body }, ...A })).json().id;
+  const save = (who, id, o) => req(who, 'POST', `/jobs/${id}/record`, { body: form(o) });
+  const nj = (await req(owner, 'GET', '/new')).text;
+  ok('New job has a postcode box next to the town', /name="area"/.test(nj) && /name="postcode"[^>]*placeholder="LS12 2PY"/.test(nj));
+  const id = await mk(owner, { area: 'Leeds', postcode: 'ls12 2py' });
+  let rec = await getRec(owner, id);
+  ok('the postcode is stored tidied', rec.collection_address.postcode === 'LS12 2PY' && rec.collection_address.area === 'Leeds');
+  ok('a new job has a blank record, not errors', rec.quantity === '' && rec.waste_description === '' && rec.items.length === 0 && rec.disposal.site === '' && rec.customer.commercial === false && (await req(owner, 'GET', `/jobs/${id}`)).status === 200 && (await req(owner, 'GET', `/jobs/${id}/record`)).status === 200);
+  const bad = await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden', postcode: 'ZZZ' }, ...A });
+  ok('a bad postcode on a new job is refused in plain words', bad.status === 400 && /postcode doesn't look right/.test(bad.json().error));
+  const badForm = await req(owner, 'POST', '/api/jobs', { body: form({ job_type: 'Garden', postcode: 'ZZZ' }) });
+  ok('...and from the form it goes back to New job with the message', /\/new\?m=pc/.test(badForm.loc) && /doesn(&#39;|')t look right/.test((await req(owner, 'GET', '/new?m=pc')).text));
+  const ed = await req(owner, 'POST', `/jobs/${id}/details`, { body: form({ job_type: 'House clearance', area: 'Leeds', postcode: 'M1 1ae' }) });
+  ok('Edit details saves a postcode', /m=saved/.test(ed.loc) && (await getRec(owner, id)).collection_address.postcode === 'M1 1AE');
+  const ed2 = await req(owner, 'POST', `/jobs/${id}/details`, { body: form({ job_type: 'House clearance', area: 'Elsewhere', postcode: 'junk' }) });
+  ok('a bad postcode in Edit details saves nothing', /\/edit\?m=pc/.test(ed2.loc) && (await getRec(owner, id)).collection_address.area === 'Leeds');
+  // the record form
+  const pg = (await req(owner, 'GET', `/jobs/${id}/record`)).text;
+  ok('the record form asks for address, customer, quantity, description, EWC, flags, disposal and a receipt', ['addr1', 'cust_name', 'cust_addr', 'commercial', 'qty', 'waste_desc', 'ewc', 'flag_pops', 'flag_asbestos', 'tip_name', 'tip_licence', 'tip_date', 'tip_ticket'].every(n => pg.includes(`name="${n}"`)) && /type="file"/.test(pg) && /Tip receipt or weighbridge ticket/.test(pg));
+  ok('quantity choices are the van-load scale', ['Quarter load', 'Half load', 'Three-quarter load', 'Full load', 'More than one load'].every(l => pg.includes(l)));
+  ok('the commercial box is off, and the SIC link goes to Companies House', !/name="commercial"[^>]*checked/.test(pg) && /resources\.companieshouse\.gov\.uk\/sic\//.test(pg));
+  ok('the EWC code is on the form for the owner only', /name="ewc"/.test(pg));
+  if (crew) {
+    const cid = await mk(crew);
+    const cpg = (await req(crew, 'GET', `/jobs/${cid}/record`)).text;
+    ok('the person who made the job can open the record, without the EWC code', /name="waste_desc"/.test(cpg) && !/name="ewc"/.test(cpg) && !/EWC code/.test(cpg));
+    ok('another crew member cannot open it', (await req(crew2, 'GET', `/jobs/${cid}/record`)).status === 303 && (await req(crew2, 'GET', `/api/jobs/${cid}/record`, A)).status === 404);
+    await save(owner, cid, { ewc: '20 03 07', waste_desc: 'owner line' });
+    await save(crew, cid, { waste_desc: 'crew line', ewc: '99 99 99' });
+    const r2 = await getRec(owner, cid);
+    ok('crew can save the record but cannot change the EWC code', r2.waste_description === 'crew line' && r2.ewc_code === '20 03 07');
+    ok('crew never see the EWC code in the data either', !('ewc_code' in (await getRec(crew, cid))));
+    await req(owner, 'DELETE', `/api/jobs/${cid}`);
+  }
+  // saving
+  const full = { addr1: '12 High Street', area: 'Leeds', postcode: 'ls12 2py', cust_name: 'Mrs Smith', cust_addr: 'Flat 2\n 4 Other Road \n\nHull', commercial: '', qty: 'half', waste_desc: 'sofa and bags', ewc: '200307', tip_name: 'Test Tip', tip_addr: 'Tip Road', tip_licence: 'ab1234cd', tip_date: '2026-04-09', tip_ticket: 'T-1' };
+  const sv = await save(owner, id, full);
+  ok('the record saves', /m=saved/.test(sv.loc), sv.status + ' ' + sv.loc);
+  rec = await getRec(owner, id);
+  ok('address, customer and quantity come back as saved', rec.collection_address.line1 === '12 High Street' && rec.collection_address.postcode === 'LS12 2PY' && rec.customer.name === 'Mrs Smith' && rec.customer.address === 'Flat 2\n4 Other Road\nHull' && rec.quantity === 'half' && rec.quantity_source === 'owner');
+  ok('EWC is tidied, licence upper-cased, date kept', rec.ewc_code === '20 03 07' && rec.disposal.licence === 'AB1234CD' && rec.disposal.date === '2026-04-09' && rec.disposal.ticket === 'T-1' && rec.waste_description === 'sofa and bags');
+  const sbad = await save(owner, id, { ...full, postcode: 'zzz', ewc: '12', tip_licence: '!!', tip_date: '09/04/2026', commercial: '1', sic: '12' });
+  ok('wrong values are refused with one message each, and the form keeps what was typed', sbad.status === 400 && /LS12 2PY\. Fix it/.test(sbad.text) && /six digits/.test(sbad.text) && /letters and numbers only/.test(sbad.text) && /Pick the date from the calendar/.test(sbad.text) && /5 digits/.test(sbad.text) && /value="zzz"/.test(sbad.text));
+  ok('...and nothing was changed', (await getRec(owner, id)).collection_address.postcode === 'LS12 2PY' && (await getRec(owner, id)).ewc_code === '20 03 07');
+  await save(owner, id, { ...full, commercial: '1', cust_business: 'Greendown Trust', sic: '38 110' });
+  rec = await getRec(owner, id);
+  ok('commercial job: business name and SIC code are kept', rec.customer.commercial && rec.customer.business === 'Greendown Trust' && rec.customer.sic === '38110');
+  await save(owner, id, full);
+  rec = await getRec(owner, id);
+  ok('turning commercial off clears the business name and SIC code', !rec.customer.commercial && rec.customer.business === '' && rec.customer.sic === '');
+  // the one-tap quantity row
+  let jp = (await req(owner, 'GET', `/jobs/${id}`)).text;
+  ok('the job page has the quantity row with the saved choice marked', /name="qty" value="half" class="chip" style="background:var\(--a\)/.test(jp.replace('class="chip on"', 'class="chip"')) || /aria-pressed="true"/.test(jp));
+  await req(owner, 'POST', `/jobs/${id}/qty`, { body: form({ qty: 'full' }) });
+  ok('one tap changes the quantity', (await getRec(owner, id)).quantity === 'full');
+  await req(owner, 'POST', `/jobs/${id}/qty`, { body: form({ qty: 'huge' }) });
+  ok('a value that is not on the scale is ignored', (await getRec(owner, id)).quantity === 'full');
+  ok('quantity needs no remake: the job is still a draft', (await req(owner, 'GET', `/api/jobs/${id}/status`, A)).json().state === 'draft');
+  // flags and their warnings
+  await save(owner, id, { ...full, flag_pops: '1', flag_fridge: '1' });
+  jp = (await req(owner, 'GET', `/jobs/${id}`)).text;
+  ok('a sofa flag shows the one-line warning on the job page', jp.includes('This load has upholstered seating (a sofa or chair): it must go to a site that takes POPs waste.') && jp.includes('fridge or freezer'));
+  if (crew) {
+    const cid = await mk(crew); await save(owner, cid, { flag_pops: '1' });
+    ok('the warning is shown to the driver too', (await req(crew, 'GET', `/jobs/${cid}`)).text.includes('takes POPs waste'));
+    await req(owner, 'DELETE', `/api/jobs/${cid}`);
+  }
+  await save(owner, id, full);
+  ok('unticking removes the warnings', !/takes POPs waste/.test((await req(owner, 'GET', `/jobs/${id}`)).text));
+  // usual sites: the skin may already have one (EKP11: Biffa); the owner's own list is changed on the demo only
+  const sitesNow = (await req(owner, 'GET', `/jobs/${id}/record`)).text;
+  const skinName = (await (await fetch(BASE + '/health')).json()).skin;
+  if (skinName === 'ekp11') ok('EKP11 starts with Biffa, Armley Depot in the usual sites, with its licence', /Biffa – Armley Depot/.test(sitesNow));
+  // the tip receipt
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1100"><rect width="100%" height="100%" fill="#fff"/><g font-family="DejaVu Sans, Arial, sans-serif" fill="#000"><text x="60" y="130" font-size="58" font-weight="bold">BIFFA ARMLEY DEPOT</text><text x="60" y="230" font-size="44">WEIGHBRIDGE TICKET</text><text x="60" y="330" font-size="48">Ticket No: 482913</text><text x="60" y="420" font-size="48">Date: 09/04/2026</text><text x="60" y="510" font-size="48">Waste: Mixed household</text><text x="60" y="600" font-size="48">Net weight: 1.24 t</text></g></svg>`;
+  const receipt = await sharp(Buffer.from(svg)).jpeg().toBuffer();
+  const sendReceipt = async (who, jid, buf, type = 'image/jpeg') => { const fd = new FormData(); fd.append('file', new Blob([buf], { type }), 'r.jpg'); const r = await fetch(`${BASE}/jobs/${jid}/receipt`, { method: 'POST', body: fd, headers: { cookie: who.cookie, origin: BASE }, redirect: 'manual' }); return { status: r.status, loc: r.headers.get('location') || '' }; };
+  const rid = await mk(owner);
+  const rr = await sendReceipt(owner, rid, receipt);
+  ok('a receipt is accepted from the record page', rr.status === 303 && /\/record\?m=(receipt|noread|unclear|receiptfail)/.test(rr.loc), rr.loc);
+  rec = await getRec(owner, rid);
+  ok('the receipt is kept with the job, and is not a photo of the job', rec.disposal.receipt === true);
+  const img = await fetch(`${BASE}/api/jobs/${rid}/receipt`, { headers: { cookie: owner.cookie } });
+  ok('the owner can see the receipt photo', img.status === 200 && /image\/jpeg/.test(img.headers.get('content-type')));
+  if (crew) ok('another crew member cannot', (await fetch(`${BASE}/api/jobs/${rid}/receipt`, { headers: { cookie: crew2.cookie } })).status === 404);
+  const notPic = await sendReceipt(owner, rid, Buffer.from('not a picture'), 'image/jpeg');
+  ok('a file that is not a picture is refused in plain words', /m=receiptbad/.test(notPic.loc) && /couldn(&#39;|')t be read as a picture/.test((await req(owner, 'GET', `/jobs/${rid}/record?m=receiptbad`)).text));
+  const read = rec.disposal;
+  if (/m=receipt$/.test(rr.loc)) ok('the receipt was read: ticket number and date filled into the boxes', /482913/.test(read.ticket) && read.date === '2026-04-09', JSON.stringify(read));
+  else console.log('NOTE  the receipt could not be read automatically on this app (' + rr.loc + '); the boxes stay for typing');
+  // typed values are not overwritten by a second receipt
+  await save(owner, rid, { tip_name: 'My typed site', tip_ticket: 'MINE' });
+  await sendReceipt(owner, rid, receipt);
+  const kept = (await getRec(owner, rid)).disposal;
+  ok('a second receipt does not overwrite what was typed', kept.site === 'My typed site' && kept.ticket === 'MINE');
+  const rm = await req(owner, 'POST', `/jobs/${rid}/receipt/remove`, { body: '' });
+  ok('the receipt photo can be removed', /m=receiptgone/.test(rm.loc) && (await getRec(owner, rid)).disposal.receipt === false && (await fetch(`${BASE}/api/jobs/${rid}/receipt`, { headers: { cookie: owner.cookie } })).status === 404);
+  await req(owner, 'DELETE', `/api/jobs/${rid}`);
+  // reading the job photos: items, flags and an estimate, with a video made alongside
+  const before = real('before.jpg') || await jpeg(1200, 1600, { shade: 70 }), after = real('after.jpg') || await jpeg(1200, 1600, { shade: 40 });
+  const pid = await mk(owner, { job_type: 'House clearance' });
+  await upload(owner, pid, 'before', 0, await sharp(before).resize({ width: 1200, withoutEnlargement: true }).jpeg().toBuffer()); await upload(owner, pid, 'after', 0, await sharp(after).resize({ width: 1200, withoutEnlargement: true }).jpeg().toBuffer());
+  await req(owner, 'POST', `/jobs/${pid}/voice`, { body: form({ voice: 'none', line1: 'Here is the room before we started.', line2: 'And here it is, cleared.', line3: 'Thanks for watching.' }) });
+  let got = null; for (let i = 0; i < 40; i++) { got = await getRec(owner, pid); if (got.items && got.items.length) break; if (i === 0) await new Promise(r => setTimeout(r, 4000)); else await new Promise(r => setTimeout(r, 3000)); }
+  const keySet = got && got.items && got.items.length > 0;
+  if (!keySet) console.log('NOTE  the photos were not read on this app (no photo-reading key, or the model did not answer); skipping the checks that need it');
+  else {
+    ok('starting a video also reads the photos: items with a count and a material', got.items.every(i => i.item && i.count >= 1 && R.MATERIALS.includes(i.material)), JSON.stringify(got.items));
+    ok('a quantity estimate on the scale is stored and pre-selected', R.QTY_KEYS.includes(got.quantity) && got.quantity_source === 'estimate', JSON.stringify([got.quantity, got.quantity_source]));
+    ok('the description is made from the items, and an EWC code is set from the job type or the items', got.waste_description.length > 3 && /^\d{2} \d{2} \d{2}$/.test(got.ewc_code), got.waste_description + ' / ' + got.ewc_code);
+    ok('the flags are all true or false', Object.keys(got.flags).sort().join() === R.FLAGS.slice().sort().join() && Object.values(got.flags).every(v => typeof v === 'boolean'));
+    await save(owner, pid, { waste_desc: 'my own words', ewc: '20 03 01', qty: 'quarter' });
+    const again = await req(owner, 'POST', `/jobs/${pid}/record/read`, { body: '' });
+    const re = await getRec(owner, pid);
+    ok('"Read the photos again" lists them again, replacing the line and code, but keeps the quantity the owner chose', /m=reread/.test(again.loc) && re.waste_description !== 'my own words' && re.quantity === 'quarter', again.loc + ' / ' + re.waste_description);
+  }
+  // the video does not include the receipt, and the job still finishes
+  await sendReceipt(owner, pid, receipt);
+  for (let i = 0; i < 40; i++) { const s = (await req(owner, 'GET', `/api/jobs/${pid}/status`, A)).json(); if (s.state !== 'rendering') break; await new Promise(r => setTimeout(r, 3000)); }
+  ok('the video was made from the job photos only (a receipt on the job does not stop it)', (await req(owner, 'GET', `/api/jobs/${pid}/status`, A)).json().state === 'ready');
+  const photosPage = (await req(owner, 'GET', `/jobs/${pid}`)).text;
+  ok('the job page lists the record card with the quantity row', /Job record/.test(photosPage) && /name="qty"/.test(photosPage));
+  await req(owner, 'DELETE', `/api/jobs/${pid}`); await req(owner, 'DELETE', `/api/jobs/${id}`);
+}
+
+// Settings that belong to the owner (demo only: they change live settings)
+async function phaseRecordSettings() {
+  console.log('\n== Intake 2: van size, VAT number, usual sites, vans on the job (demo only) ==');
+  if (!ADMIN_PW) return;
+  if (!(await onDemoOnly('van size, VAT number, usual sites'))) return;
+  const A = { headers: { accept: 'application/json' } };
+  const email = `recs-${RUN}${TEST}`, pw = 'Recs-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Recs Test', email, password: pw }) });
+  const owner = (await login(email, pw)).p;
+  const getRec = async id => (await req(owner, 'GET', `/api/jobs/${id}/record`, A)).json();
+  const biz = o => req(owner, 'POST', '/settings/business', { body: form({ trading: '', mobile: '', area: '', vans: '', ins_name: '', ins_expiry: '', van_cap: '', vat: '', ...o }) });
+  try {
+    ok('Settings shows the van size (17 by default) and the VAT number box', /name="van_cap"[^>]*value="17"/.test((await req(owner, 'GET', '/settings')).text) && /name="vat"/.test((await req(owner, 'GET', '/settings')).text));
+    await biz({ van_cap: '12', vat: 'gb 513468006' });
+    let st = (await req(owner, 'GET', '/settings')).text;
+    ok('the van size and VAT number are saved (VAT tidied)', /name="van_cap"[^>]*value="12"/.test(st) && /value="513 4680 06"/.test(st));
+    const id = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+    await req(owner, 'POST', `/jobs/${id}/qty`, { body: form({ qty: 'half' }) });
+    let rec = await getRec(id);
+    ok('the record shows the half load in cubic yards for the saved van size', rec.van_capacity_cubic_yards === 12 && rec.quantity_cubic_yards === 6);
+    ok('the job page says "Half load (6 cubic yards)"', (await req(owner, 'GET', `/jobs/${id}`)).text.includes('Half load (6 cubic yards)'));
+    const b1 = await biz({ van_cap: '99' }); ok('a silly van size is refused in plain words', b1.status === 400 && /number of cubic yards between 1 and 60/.test(b1.text));
+    const b2 = await biz({ van_cap: '12', vat: '123' }); ok('a wrong VAT number is refused in plain words', b2.status === 400 && /doesn(&#39;|')t look like a VAT number/.test(b2.text));
+    await biz({ van_cap: '', vat: '' });
+    ok('clearing the van size puts back 17', /name="van_cap"[^>]*value="17"/.test((await req(owner, 'GET', '/settings')).text));
+    // vans on the job
+    await biz({ vans: 'AB12 CDE' });
+    const j1 = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+    ok('with one van, every job gets it, with no choice asked', (await getRec(j1)).van === 'AB12CDE' && !/name="van"/.test((await req(owner, 'GET', `/jobs/${j1}/record`)).text));
+    await biz({ vans: 'AB12 CDE\nK1 XYZ' });
+    const j2 = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+    ok('with two vans the first is used until another is picked, and the record asks which', (await getRec(j2)).van === 'AB12CDE' && /name="van"/.test((await req(owner, 'GET', `/jobs/${j2}/record`)).text));
+    await req(owner, 'POST', `/jobs/${j2}/record`, { body: form({ van: 'K1XYZ', area: '', postcode: '' }) });
+    const j3 = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id;
+    ok('the van picked last time is remembered for the next job', (await getRec(j2)).van === 'K1XYZ' && (await getRec(j3)).van === 'K1XYZ');
+    await req(owner, 'POST', `/jobs/${j2}/record`, { body: form({ van: 'ZZ99ZZZ', area: '', postcode: '' }) });
+    ok('a van that is not in the owner list is ignored', (await getRec(j2)).van === 'K1XYZ');
+    await biz({ vans: '' });
+    // usual sites
+    ok('no usual sites at first on the demo', /No sites yet/.test((await req(owner, 'GET', '/settings')).text));
+    const add = o => req(owner, 'POST', '/settings/sites', { body: form(o) });
+    const a1 = await add({ name: 'Biffa Armley Depot', address: 'Unit C, Scotch Park Trading Estate, Leeds, LS12 2PY', licence: 'jb3607uk' });
+    st = (await req(owner, 'GET', '/settings')).text;
+    ok('a site is added with its address and licence number', /m=siteadded/.test(a1.loc) && /Biffa Armley Depot/.test(st) && /Licence JB3607UK/.test(st));
+    ok('a duplicate, a nameless site and a bad licence are each refused', /m=sitebad/.test((await add({ name: 'biffa armley depot' })).loc) && /m=sitebad/.test((await add({ name: '' })).loc) && /m=sitebad/.test((await add({ name: 'Other', licence: '!!' })).loc));
+    const rp = (await req(owner, 'GET', `/jobs/${j1}/record`)).text;
+    ok('the record form offers the site to tap', /<option value="0">Biffa Armley Depot<\/option>/.test(rp));
+    await req(owner, 'POST', `/jobs/${j1}/record`, { body: form({ site_pick: '0', area: '', postcode: '', tip_name: 'ignored' }) });
+    rec = await getRec(j1);
+    ok('tapping the site fills the name, address and licence number', rec.disposal.site === 'Biffa Armley Depot' && /LS12 2PY/.test(rec.disposal.address) && rec.disposal.licence === 'JB3607UK');
+    // a receipt that names a usual site brings its address and licence
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900"><rect width="100%" height="100%" fill="#fff"/><g font-family="DejaVu Sans, Arial, sans-serif"><text x="60" y="130" font-size="58" font-weight="bold">BIFFA ARMLEY DEPOT</text><text x="60" y="260" font-size="48">Ticket No: 777123</text><text x="60" y="350" font-size="48">Date: 09/04/2026</text></g></svg>`;
+    const fd = new FormData(); fd.append('file', new Blob([await sharp(Buffer.from(svg)).jpeg().toBuffer()], { type: 'image/jpeg' }), 'r.jpg');
+    await fetch(`${BASE}/jobs/${j3}/receipt`, { method: 'POST', body: fd, headers: { cookie: owner.cookie, origin: BASE }, redirect: 'manual' });
+    const r3 = (await getRec(j3)).disposal;
+    if (r3.site) ok('a receipt naming a usual site brings that site\'s address and licence number', /Biffa/i.test(r3.site) && r3.licence === 'JB3607UK' && /LS12 2PY/.test(r3.address), JSON.stringify(r3));
+    else console.log('NOTE  the receipt was not read on this app, so the usual-site match was not checked');
+    const rm = await req(owner, 'POST', '/settings/sites/0/remove', { body: '' });
+    ok('a site can be removed', /m=siteremoved/.test(rm.loc) && /No sites yet/.test((await req(owner, 'GET', '/settings')).text));
+    for (const x of [id, j1, j2, j3]) await req(owner, 'DELETE', `/api/jobs/${x}`);
+  } finally { await biz({}); const l = (await req(owner, 'GET', '/settings')).text; for (let i = 0; i < 5 && !/No sites yet/.test(l); i++) await req(owner, 'POST', '/settings/sites/0/remove', { body: '' }); }
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -1185,6 +1433,7 @@ async function phaseIntake1Server() {
     if (['reg', 'regengine', 'all'].includes(which)) await phaseReg();
     if (['reg', 'all'].includes(which)) await phaseRegServer();
     if (['intake1', 'all'].includes(which)) { await phaseIntake1(); await phaseIntake1Server(); }
+    if (['record', 'all'].includes(which)) { await phaseRecord(); await phaseRecordServer(); await phaseRecordSettings(); }
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }

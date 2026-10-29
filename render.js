@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const { sameOrigin } = require('./lib/util');
 const regFor = require('./lib/reg');
 
-module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVoice }) {
+module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVoice, getRecord }) {
   const { needUser } = acct;
   const regMod = regFor(pool, SKIN);
   const queue = []; let busy = false;
@@ -78,6 +78,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
     if (!ph.includes('before') || !ph.includes('after')) return { code: 400, error: 'Add a BEFORE and an AFTER photo first.' };
     await pool.query("UPDATE jobs SET state='rendering', render_error=NULL WHERE id=$1", [j.id]);
     events(change ? 'photos_changed_remake' : 'render_start', user.id, j.id, change ? j.state : ''); enqueue(j.id);
+    Promise.resolve().then(() => getRecord().analyse(j.id, { refresh: !!change })).catch(() => {});      // list the items and estimate the load from the photos, alongside the video (not waited for; after Change photos they are read again, but what the owner typed is kept)
     return { code: 200, state: 'rendering' };
   }
 

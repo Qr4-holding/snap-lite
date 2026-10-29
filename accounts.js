@@ -14,7 +14,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const { page, msg } = ui;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const SESSION_DAYS = 180;
-  const profileMod = profileFor(pool), legalMod = legalFor(pool, SKIN), logo = logoMod(SKIN);
+  const profileMod = profileFor(pool, SKIN), legalMod = legalFor(pool, SKIN), logo = logoMod(SKIN);
   const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 4 } });
   const TEST_DOMAIN = '@snaplite-test.invalid';
 
@@ -145,10 +145,10 @@ ${joinBlock()}`);
     const people = u.role === 'owner' ? (await pool.query(`SELECT id,email,role FROM users WHERE biz_id=$1 AND id<>$2 AND deleted_at IS NULL ORDER BY id`, [u.biz_id, u.id])).rows : [];
     const rgv = u.role === 'owner' ? await regFor(pool, SKIN).get() : null;
     const prof = u.role === 'owner' ? await profileMod.get() : null, lg = u.role === 'owner' ? await legalMod.status(u.id) : null, hasLogo = logo.custom();
-    const q = req.query, flash = over.flash != null ? over.flash : { invited: '', keys: 'Keys saved.', reg: 'Checked against the Environment Agency register and saved.', reglower: 'Saved. This is a lower tier registration, which covers your own waste only, so the registered-carrier mark is left off your videos.', regnone: "Not saved: that number isn't on the Environment Agency register. Check it against your registration certificate and try again.", regoffline: "Saved, but we couldn't reach the Environment Agency register just now, so it hasn't been checked. Tap Check again in a few minutes.", regcleared: 'Registration removed. No mark is shown on your videos.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: a registration number is letters then numbers, for example CBDU123456, and an expiry date must be a real date.', bizsaved: 'Business details saved.', logook: 'Logo saved. It is used on videos you make from now on.', logoreset: 'Standard logo put back.', logobad: "That file couldn't be read as a picture. Use a PNG or JPG.", accepted: 'Thank you. Your acceptance is saved.', acceptnone: 'Tick the box next to each one you accept, then tap Accept.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
+    const q = req.query, flash = over.flash != null ? over.flash : { invited: '', keys: 'Keys saved.', reg: 'Checked against the Environment Agency register and saved.', reglower: 'Saved. This is a lower tier registration, which covers your own waste only, so the registered-carrier mark is left off your videos.', regnone: "Not saved: that number isn't on the Environment Agency register. Check it against your registration certificate and try again.", regoffline: "Saved, but we couldn't reach the Environment Agency register just now, so it hasn't been checked. Tap Check again in a few minutes.", regcleared: 'Registration removed. No mark is shown on your videos.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: a registration number is letters then numbers, for example CBDU123456, and an expiry date must be a real date.', bizsaved: 'Business details saved.', siteadded: 'Site added.', siteremoved: 'Site removed.', sitebad: 'Not added. Give the site a name, and check the licence number (letters and numbers only) and that it is not already in the list.', logook: 'Logo saved. It is used on videos you make from now on.', logoreset: 'Standard logo put back.', logobad: "That file couldn't be read as a picture. Use a PNG or JPG.", accepted: 'Thank you. Your acceptance is saved.', acceptnone: 'Tick the box next to each one you accept, then tap Accept.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
     return page('Settings', `
-<h1>Settings</h1>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone)$/.test(q.m || ''))}${invited}
+<h1>Settings</h1>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone|sitebad)$/.test(q.m || ''))}${invited}
 <p>Signed in as <b>${esc(u.email)}</b> (${u.role}).</p>
 ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
@@ -172,10 +172,16 @@ return `<label class="f">Trading name <span class="small">(what customers know y
 <label class="f">Mobile number <span class="small">(where quote enquiries go)</span><input name="mobile" type="tel" inputmode="tel" maxlength="20" value="${val('mobile', prof.mobileNice)}" placeholder="07700 900123">${er('mobile')}</label>
 <label class="f">Base town or area <span class="small">(where you work from)</span><input name="area" maxlength="60" value="${val('area', prof.area)}">${er('area')}</label>
 <label class="f">Van registration(s) <span class="small">(one per line)</span><textarea name="vans" rows="3" autocapitalize="characters" placeholder="AB12 CDE">${val('vans', prof.vans.map(x => require('./lib/profile').platePretty(x)).join('\n'))}</textarea>${er('vans')}</label>
+<label class="f">How big is your van? <span class="small">(cubic yards, so a full load can be shown in yards)</span><input name="van_cap" inputmode="decimal" maxlength="6" value="${val('van_cap', prof.vanCap)}">${er('van_cap')}</label>
+<label class="f">VAT number <span class="small">(optional; printed at the foot of your transfer notes)</span><input name="vat" maxlength="20" value="${val('vat', prof.vat)}" placeholder="513 4680 06">${er('vat')}</label>
 <label class="f">Public liability insurance: insurer <span class="small">(optional; you tell us, we don't check it)</span><input name="ins_name" maxlength="100" value="${val('ins_name', prof.ins_name)}"></label>
 <label class="f">Insurance expiry date<input name="ins_expiry" type="date" value="${val('ins_expiry', prof.ins_expiry)}">${er('insurance')}</label>`; })()}
 <p class="small" style="margin:0">${prof.insured ? `On your profile: <b>${esc(prof.insuranceLine)}</b>. It is never put on your videos.` : 'Insurance is only shown on your profile while the expiry date is in the future, and never on your videos.'}</p>
 <button type="submit">Save business details</button></form>
+<h2>Usual disposal sites</h2>
+<div class="card"><p class="small" style="margin:0">The tips and depots you use. On each job you tap the site instead of typing it. The licence or permit number goes on the transfer note.</p>
+${prof.sites.length ? prof.sites.map((x, i) => `<div style="border-top:1px solid #0001;padding-top:8px"><b>${esc(x.name)}</b><br><span class="small">${esc(x.address)}${x.licence ? ` · Licence ${esc(x.licence)}` : ''}</span><form method="post" action="/settings/sites/${i}/remove" style="margin-top:6px"><button class="sec small" type="submit">Remove</button></form></div>`).join('') : '<p class="small" style="margin:0">No sites yet.</p>'}
+<form method="post" action="/settings/sites" style="display:grid;gap:8px;border-top:1px solid #0001;padding-top:8px"><label class="f">Site name<input name="name" maxlength="80" placeholder="Biffa, Armley Depot"></label><label class="f">Address<input name="address" maxlength="160"></label><label class="f">Site licence or permit number<input name="licence" maxlength="30" autocapitalize="characters"></label><button type="submit">Add this site</button></form></div>
 <h2>Logo</h2>
 <form class="card" method="post" action="/settings/logo" enctype="multipart/form-data"><img src="/assets/logo.png?v=${esc(logo.version())}" alt="Your logo" style="max-height:80px;max-width:60%;background:#fff;border-radius:8px;padding:6px"><p class="small" style="margin:0">Used on your videos from now on. Videos already made are not changed. A PNG with a clear background looks best.</p>
 <label class="f">Choose a picture (PNG or JPG)<input name="logo" type="file" accept="image/png,image/jpeg" required></label><button type="submit">Save logo</button></form>
@@ -229,13 +235,20 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
   // business details: trading name (kept with the registration), mobile, base town, vans, insurance
   app.post('/settings/business', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
     const b = req.body || {};
-    const r = await profileMod.save({ mobile: b.mobile, area: b.area, vans: b.vans, ins_name: b.ins_name, ins_expiry: b.ins_expiry });
+    const r = await profileMod.save({ mobile: b.mobile, area: b.area, vans: b.vans, ins_name: b.ins_name, ins_expiry: b.ins_expiry, van_cap: b.van_cap, vat: b.vat });
     if (!r.ok) {
-      const html = await settingsHtml({ ...req, query: {} }, { flash: 'Not saved. Please fix what is marked in red and tap Save again.', isBad: true, problems: r.problems, values: { trading: b.trading, mobile: b.mobile, area: b.area, vans: b.vans, ins_name: b.ins_name, ins_expiry: b.ins_expiry } });
+      const html = await settingsHtml({ ...req, query: {} }, { flash: 'Not saved. Please fix what is marked in red and tap Save again.', isBad: true, problems: r.problems, values: { trading: b.trading, van_cap: b.van_cap, vat: b.vat, mobile: b.mobile, area: b.area, vans: b.vans, ins_name: b.ins_name, ins_expiry: b.ins_expiry } });
       return res.status(400).set('Cache-Control', 'no-store').send(html);
     }
     await regFor(pool, SKIN).saveTrading(b.trading);
     res.redirect(303, '/settings?m=bizsaved');
+  } catch (e) { next(e); } });
+
+  app.post('/settings/sites', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
+    const r = await profileMod.addSite(req.body || {}); res.redirect(303, '/settings?m=' + (r.ok ? 'siteadded' : 'sitebad'));
+  } catch (e) { next(e); } });
+  app.post('/settings/sites/:i/remove', sameOrigin, needUser(), needOwner, form, async (req, res, next) => { try {
+    await profileMod.removeSite(parseInt(req.params.i, 10)); res.redirect(303, '/settings?m=siteremoved');
   } catch (e) { next(e); } });
 
   // logo: any PNG or JPG, kept as a PNG no bigger than 1000px
