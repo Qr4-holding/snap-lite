@@ -52,14 +52,18 @@ table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px
     const keyState = { el: await secrets.has('elevenlabs_key'), an: await secrets.has('anthropic_key'), mail: await mailMod.configured() };
     const b = (await pool.query('SELECT * FROM businesses WHERE slug=$1', [SKIN.id])).rows[0];
     const users = b ? (await pool.query('SELECT id,email,role,created_at,deleted_at FROM users WHERE biz_id=$1 ORDER BY id', [b.id])).rows : [];
+    const st = await acct.standing.get(), stlog = await acct.standing.log();
     const counts = (await pool.query('SELECT state, count(*)::int n FROM jobs WHERE deleted_at IS NULL GROUP BY state ORDER BY state')).rows;
-    const flash = { owner: ['Owner created.', 0], bad: [req.query.why || 'Not saved.', 1], pw: ['Sign-in details saved. Use them next time.', 0], pwbad: ['Not saved: wrong current password, or the new passwords do not match or are under 12 characters.', 1], purged: ['Test data removed.', 0], keys: ['Keys saved.', 0] }[req.query.m];
+    const flash = { flagged: ['Saved and logged.', 0], owner: ['Owner created.', 0], bad: [req.query.why || 'Not saved.', 1], pw: ['Sign-in details saved. Use them next time.', 0], pwbad: ['Not saved: wrong current password, or the new passwords do not match or are under 12 characters.', 1], purged: ['Test data removed.', 0], keys: ['Keys saved.', 0] }[req.query.m];
     res.set('Cache-Control', 'no-store').send(shell('Overview', `<h1>${esc(SKIN.name)} admin</h1>
 ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
 <h2>Business</h2><p>${b ? `${esc(b.name)} (${esc(b.slug)})` : 'Not created yet: it is created with the first owner.'} · version ${esc(process.env.APP_VERSION || 'dev')}</p>
 <h2>People</h2><table><tr><th>Email</th><th>Role</th><th>Created</th><th></th></tr>${users.map(u => `<tr><td>${esc(u.email)}</td><td>${u.role}</td><td>${new Date(u.created_at).toLocaleDateString('en-GB')}</td><td>${u.deleted_at ? 'deleted' : ''}</td></tr>`).join('') || '<tr><td colspan="4">No one yet.</td></tr>'}</table>
 <h2>Create an owner</h2><form class="card" method="post" action="/admin/owner"><label>Name<input name="name" maxlength="80"></label><label>Email<input name="email" type="email" required></label><label>Password (8 or more)<input name="password" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Create owner</button></form>
 <h2>Jobs by state</h2><p>${counts.map(c => `${esc(c.state)}: ${c.n}`).join(' · ') || 'No jobs yet.'}</p>
+<h2>Clean Up UK standing</h2><p class="small">Pledged: <b>${st.pledged ? 'yes (version ' + st.pledge_version + ')' : 'no'}</b> · registration checked: <b>${st.verified ? 'yes' : 'no'}</b> · flag: <b>${esc(st.flag || 'none')}</b> · on the hub: <b>${st.campaign_eligible ? 'yes' : 'no'}</b>${st.flag_note ? `<br>Note: ${esc(st.flag_note)}` : ''}</p>
+<form class="card" method="post" action="/admin/standing"><label>What to do<select name="action"><option value="reported">Reported: withdraw the mark and hub listing while it is reviewed</option><option value="confirmed">Confirmed: remove the business (shown for 12 months)</option><option value="cleared">Cleared: restore everything</option></select></label><label>Note (kept in the log)<textarea name="note" maxlength="500" rows="3"></textarea></label><button type="submit">Save flag</button></form>
+${stlog.length ? `<table><tr><th>When</th><th>Action</th><th>By</th><th>Note</th></tr>${stlog.map(l => `<tr><td>${new Date(l.ts).toLocaleString('en-GB', { timeZone: 'Europe/London' })}</td><td>${esc(l.action)}</td><td>${esc(l.who)}</td><td>${esc(l.note)}</td></tr>`).join('')}</table>` : ''}
 <h2>Backups</h2><ul>${listBackups().map(f => `<li><a href="/admin/backup/${esc(f)}">${esc(f)}</a></li>`).join('') || '<li>The first backup appears after tonight.</li>'}</ul>
 <h2>Sign-in details</h2><form class="card" method="post" action="/admin/password"><label>Username<input name="user" value="${esc(ADMIN_USER)}" required minlength="3"></label><label>Current password<input name="current" type="password" required autocomplete="current-password"></label><label>New password (12 or more, blank keeps current)<input name="next" type="password" minlength="12" autocomplete="new-password"></label><label>New password again<input name="again" type="password" minlength="12" autocomplete="new-password"></label><button type="submit">Save</button></form>
 <h2>Voice and writing keys</h2><p class="small">ElevenLabs: ${keyState.el ? 'set' : 'not set'} · Anthropic: ${keyState.an ? 'set' : 'not set'}. Pasted keys are stored on the server and never shown again; leave a box blank to keep the current key.</p><form class="card" method="post" action="/admin/keys"><label>ElevenLabs API key<input name="elevenlabs_key" type="password" autocomplete="off"></label><label>Anthropic API key<input name="anthropic_key" type="password" autocomplete="off"></label><h2>Password reset email (Brevo SMTP)</h2><p class="small">Email sending: ${keyState.mail ? 'ready' : 'not set'}. Needs the Brevo SMTP login, the SMTP key, and a sender address verified in Brevo.</p><label>Brevo SMTP login<input name="brevo_login" autocomplete="off"></label><label>Brevo SMTP key<input name="brevo_key" type="password" autocomplete="off"></label><label>Send from (verified address)<input name="mail_from" type="email" autocomplete="off"></label><div style="display:flex;gap:10px;flex-wrap:wrap"><button type="submit">Save keys</button><button type="submit" name="back" value="1">Save keys and go back</button></div></form>
@@ -150,9 +154,19 @@ ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}
     for (const [k, f] of [['reg_name', 'name'], ['reg_number', 'number'], ['reg_expiry', 'expiry'], ['reg_tier', 'tier'], ['reg_checked', 'checked']]) await put(k, b[f]);
     res.json({ ok: true });
   } catch (e) { next(e); } });
+  // Test hook, demo skin only: sets the raw flag and its date, so the 12-month rule can be tested.
+  app.post('/admin/test-flag', auth, sameOrigin, form, async (req, res, next) => { try {
+    if (SKIN.id !== 'demo') return res.status(403).send('Test hook is for the demo only.');
+    const b = req.body || {}, put = (k, v) => pool.query('INSERT INTO settings (key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [k, String(v || '')]);
+    await put('pledge_flag', b.flag); await put('pledge_flag_at', b.at); res.json({ ok: true });
+  } catch (e) { next(e); } });
   // run the nightly registration re-check now (also used by the tests)
   app.post('/admin/recheck-registration', auth, sameOrigin, form, async (req, res, next) => { try {
     res.json(await require('./lib/reg')(pool, SKIN).recheck());
+  } catch (e) { next(e); } });
+  app.post('/admin/standing', auth, sameOrigin, form, async (req, res, next) => { try {
+    const r = await acct.standing.setFlag(req.body.action, req.body.note, ADMIN_USER);
+    res.redirect(303, r.ok ? '/admin?m=flagged' : '/admin?m=bad&why=' + encodeURIComponent(r.why));
   } catch (e) { next(e); } });
   app.post('/admin/purge-test', auth, sameOrigin, form, async (req, res, next) => { try {
     const ids = (await pool.query('SELECT id FROM users WHERE email LIKE $1', ['%' + acct.TEST_DOMAIN])).rows.map(r => r.id);

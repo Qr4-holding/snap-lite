@@ -41,7 +41,7 @@ module.exports = function share({ app, pool, SKIN, ui, acct, jobsMod, events }) 
   app.get('/job/:slug', async (req, res, next) => { try {
     const j = await bySig(req);
     if (!j) return res.status(404).type('text/plain').send('Not found');
-    const base = `/job/${j.slug}`, o = origin(req);
+    const base = `/job/${j.slug}`, o = origin(req), stand = await acct.standing.get().catch(() => null);
     const vurl = `${base}/video?${q(req)}`, curl = `${base}/cover?${q(req)}`;
     const head = `<meta property="og:type" content="video.other"><meta property="og:title" content="${esc(SKIN.name)}: before and after"><meta property="og:image" content="${esc(o + curl)}"><meta property="og:video" content="${esc(o + vurl)}"><meta property="og:video:type" content="video/mp4">`;
     res.set({ 'Cache-Control': 'private, no-cache', 'X-Robots-Tag': 'noindex, nofollow' }).send(page('Before and after', `
@@ -50,7 +50,7 @@ module.exports = function share({ app, pool, SKIN, ui, acct, jobsMod, events }) 
 <div style="display:grid;gap:10px;margin-top:16px;text-align:center">
 ${SKIN.phone ? `<a class="btn" href="tel:${esc(String(SKIN.phone).replace(/\s+/g, ''))}">Call ${esc(SKIN.phone)}</a>` : ''}
 ${SKIN.web ? `<a class="btn sec" href="https://${esc(SKIN.web)}">${esc(SKIN.web)}</a>` : ''}
-<p class="small">${esc(SKIN.name)}</p></div>`, { headExtra: head }));
+<p class="small">${esc(SKIN.name)}</p>${stand && stand.campaign_eligible ? '<p class="small" style="margin:0"><b>✔ Clean Up UK Pledged</b></p>' : ''}</div>`, { headExtra: head }));
   } catch (e) { next(e); } });
   const media = (name, type) => async (req, res, next) => { try {
     const j = await bySig(req);

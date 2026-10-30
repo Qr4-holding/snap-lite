@@ -1474,6 +1474,95 @@ async function phaseOutputs() {
   } finally { await req(owner, 'DELETE', `/api/jobs/${id}`); }
 }
 
+async function phaseStanding() {
+  console.log('\n== Intake 4: Clean Up UK Pledge effects (demo only: it changes live settings and flags) ==');
+  if (!ADMIN_PW || !(await onDemoOnly('Pledge effects'))) return;
+  const A = { headers: { accept: 'application/json' } };
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), plus = n => new Date(Date.now() + n * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const email = `st-${RUN}${TEST}`, pw = 'St-pass-' + RUN;
+  const standing = async () => { const r = await fetch(BASE + '/standing.json'); return { r, j: await r.json() }; };
+  const hook = (num, exp, tier) => req(admin(), 'POST', '/admin/test-registration', { body: form({ name: 'Test Carrier Ltd', number: num, expiry: exp, tier, checked: new Date().toISOString() }) });
+  const rawFlag = (flag, at) => req(admin(), 'POST', '/admin/test-flag', { body: form({ flag, at }) });
+  const flag = (action, note) => req(admin(), 'POST', '/admin/standing', { body: form({ action, note }) });
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'St Test', email, password: pw }) });
+  const owner = (await login(email, pw)).p;
+  try {
+    // the public page: no sign-in, cached, the agreed fields
+    const s0 = await standing();
+    const FIELDS = ['business', 'registration_number', 'registration_tier', 'registration_expires', 'registration_checked_at', 'pledged', 'pledge_version', 'pledged_at', 'insured_until', 'campaign_eligible', 'reported', 'removed_at', 'app_origin', 'updated_at'];
+    ok('/standing.json is public, cached for five minutes, and has exactly the agreed fields', s0.r.status === 200 && /max-age=300/.test(s0.r.headers.get('cache-control') || '') && JSON.stringify(Object.keys(s0.j).sort()) === JSON.stringify(FIELDS.slice().sort()), JSON.stringify(Object.keys(s0.j)));
+    ok('app_origin and updated_at are filled in', s0.j.app_origin === 'https://' + new URL(BASE).host && !isNaN(Date.parse(s0.j.updated_at)));
+    ok('nothing private is in it (no email, name of owner, notes or flags text)', !/@|note|flag/i.test(JSON.stringify(s0.j).replace(/"[a-z_]+":/g, m => /campaign|reported/.test(m) ? '' : m)));
+    // not pledged yet, registration checked and upper tier: still not eligible
+    await hook('CBDU527134', plus(300), 'upper');
+    let s = (await standing()).j;
+    ok('with a checked upper-tier registration but no Pledge tick, the business is not eligible', s.pledged === false && s.campaign_eligible === false && s.registration_tier === 'upper' && s.registration_number === 'CBDU527134' && s.registration_expires === plus(300) && !!s.registration_checked_at);
+    ok('the Settings card says what is missing, with no badge', /Not on Clean Up UK yet/.test((await req(owner, 'GET', '/settings')).text) && !/✔ Clean Up UK Pledged/.test((await req(owner, 'GET', '/settings')).text));
+    await req(owner, 'POST', '/settings/accept', { body: 'back=%2F&doc=pledge' });
+    s = (await standing()).j;
+    ok('ticking the Pledge makes it pledged with its version and time, and now eligible', s.pledged === true && s.pledge_version >= 1 && !!s.pledged_at && s.campaign_eligible === true);
+    ok('Settings shows the Clean Up UK Pledged badge', /✔ Clean Up UK Pledged/.test((await req(owner, 'GET', '/settings')).text));
+    // registration problems take eligibility away
+    await hook('CBDL000001', plus(300), 'lower'); s = (await standing()).j;
+    ok('a lower-tier registration is not eligible', s.pledged && s.registration_tier === 'lower' && s.campaign_eligible === false);
+    await hook('CBDU527134', plus(-3), 'upper'); s = (await standing()).j;
+    ok('an expired registration is not eligible', s.campaign_eligible === false);
+    await req(admin(), 'POST', '/admin/test-registration', { body: form({ name: 'Test Carrier Ltd', number: 'CBDU527134', expiry: plus(300), tier: 'upper', checked: '' }) }); s = (await standing()).j;
+    ok('a registration never checked against the register is not eligible', s.campaign_eligible === false && s.registration_checked_at === null);
+    await hook('CBDU527134', plus(300), 'upper');
+    // the shared job page badge, using a real approved video
+    const mk = async () => { const id = (await req(owner, 'POST', '/api/jobs', { json: { job_type: 'Garden' }, ...A })).json().id; await upload(owner, id, 'before', 0, await jpeg(1200, 1600)); await upload(owner, id, 'after', 0, await jpeg(1200, 1600, { shade: 40 }));
+      await req(owner, 'POST', `/jobs/${id}/voice`, { body: form({ voice: 'none', line1: 'Here is the garden before we started.', line2: 'And here it is, tidy.', line3: 'Thanks for watching.' }) });
+      for (let i = 0; i < 120; i += 3) { const st = (await req(owner, 'GET', `/api/jobs/${id}/status`)).json(); if (st.state !== 'rendering') break; await new Promise(r => setTimeout(r, 3000)); } return id; };
+    const jid = await mk();
+    ok('the video is made', (await req(owner, 'GET', `/api/jobs/${jid}/status`)).json().state === 'ready');
+    await req(owner, 'POST', `/api/jobs/${jid}/approve`, { json: {}, ...A });
+    const link = (await req(owner, 'POST', `/api/jobs/${jid}/link`, { json: {}, ...A })).json().url, lp = new URL(link).pathname + new URL(link).search;
+    const share = async () => (await fetch(BASE + lp)).text();
+    ok('the shared page shows the Pledged badge under the business name when eligible', /✔ Clean Up UK Pledged/.test(await share()));
+    // reported: withdrawn
+    ok('a flag needs a note', /m=bad/.test((await flag('reported', '')).loc) && (await standing()).j.reported === false);
+    ok('"confirmed" before "reported" is refused', /m=bad/.test((await flag('confirmed', 'x')).loc) && (await standing()).j.removed_at === null);
+    ok('"cleared" with nothing flagged is refused', /m=bad/.test((await flag('cleared', '')).loc));
+    ok('an admin can report with a note', /m=flagged/.test((await flag('reported', 'Council says a load was dumped at Test Lane')).loc));
+    s = (await standing()).j;
+    ok('reported: not eligible, still pledged, flag shown, and the note is not public', s.reported === true && s.campaign_eligible === false && s.pledged === true && !/Test Lane/.test(JSON.stringify(s)));
+    ok('reported: the badge is gone from the shared page, the video still plays', !/Clean Up UK Pledged/.test(await share()) && /<video/.test(await share()));
+    const st2 = (await req(owner, 'GET', '/settings')).text;
+    ok('reported: Settings says the listing is paused and the registered-carrier mark is withheld', /listing is paused/.test(st2) && /No registered-carrier mark is shown/.test(st2) && !/✔ Clean Up UK Pledged/.test(st2));
+    ok('the owner cannot set or clear a flag (admin sign-in only)', (await req(owner, 'POST', '/admin/standing', { body: form({ action: 'cleared', note: '' }) })).status === 401 && (await standing()).j.reported === true);
+    // a new video made while reported has no mark
+    const jid2 = await mk();
+    ok('reported: a new video is still made', (await req(owner, 'GET', `/api/jobs/${jid2}/status`)).json().state === 'ready');
+    ok('reported: it is not blocked from sharing', (await req(owner, 'POST', `/api/jobs/${jid2}/approve`, { json: {}, ...A })).status === 200);
+    // confirmed
+    ok('an admin can confirm after a report', /m=flagged/.test((await flag('confirmed', 'Prosecuted')).loc));
+    s = (await standing()).j; const d = new Date(), monthYear = d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'Europe/London' });
+    ok('confirmed: not eligible, removed_at is today, reported is false', s.campaign_eligible === false && s.removed_at === today && s.reported === false);
+    ok('confirmed: Settings shows "Removed from Clean Up UK <month year>"', (await req(owner, 'GET', '/settings')).text.includes('Removed from Clean Up UK ' + monthYear));
+    ok('confirmed: videos can still be made and shared', (await req(owner, 'POST', `/api/jobs/${jid2}/link`, { json: {}, ...A })).status === 200);
+    // the admin page shows the state and the log
+    const ap = (await req(admin(), 'GET', '/admin')).text;
+    ok('the admin page shows the flag and logs each change with its note', /Clean Up UK standing/.test(ap) && /Prosecuted/.test(ap) && /Council says a load was dumped/.test(ap) && />reported</.test(ap) && />confirmed</.test(ap));
+    // cleared
+    ok('an admin can clear it', /m=flagged/.test((await flag('cleared', 'Mistaken identity')).loc));
+    s = (await standing()).j;
+    ok('cleared: everything is back (eligible, no removal, badge on the page and Settings)', s.campaign_eligible === true && s.removed_at === null && s.reported === false && /✔ Clean Up UK Pledged/.test(await share()) && /✔ Clean Up UK Pledged/.test((await req(owner, 'GET', '/settings')).text));
+    ok('the log keeps all three entries, including the clearing note', /Mistaken identity/.test((await req(admin(), 'GET', '/admin')).text));
+    // 12 months
+    await rawFlag('confirmed', new Date(Date.now() - 400 * 864e5).toISOString());
+    s = (await standing()).j;
+    ok('a removal older than 12 months is no longer shown, but the business stays off the hub until cleared', s.removed_at === null && s.campaign_eligible === false);
+    await rawFlag('confirmed', new Date(Date.now() - 300 * 864e5).toISOString());
+    ok('a removal under 12 months old is still shown, with its date', (await standing()).j.removed_at === plus(-300));
+  } finally {
+    await rawFlag('cleared', ''); await req(admin(), 'POST', '/admin/purge-test', { body: '' });
+    // the account is gone by now; reset the registration through a fresh owner
+    const e2 = `st2-${RUN}${TEST}`; await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'St Two', email: e2, password: pw }) }); const o2 = (await login(e2, pw)).p; await req(o2, 'POST', '/settings/registration/reset', { body: '' });
+    await req(admin(), 'POST', '/admin/purge-test', { body: '' });
+  }
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -1502,6 +1591,7 @@ async function phaseOutputs() {
     if (['intake1', 'all'].includes(which)) { await phaseIntake1(); await phaseIntake1Server(); }
     if (['record', 'all'].includes(which)) { await phaseRecord(); await phaseRecordServer(); await phaseRecordSettings(); }
     if (['outputs', 'all'].includes(which)) await phaseOutputs();
+    if (['standing', 'all'].includes(which)) await phaseStanding();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }

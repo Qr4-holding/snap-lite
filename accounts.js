@@ -15,6 +15,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const SESSION_DAYS = 180;
   const profileMod = profileFor(pool, SKIN), legalMod = legalFor(pool, SKIN), logo = logoMod(SKIN);
+  const standingMod = require('./lib/standing')({ pool, SKIN, regFor, legal: legalMod, profile: profileMod, testDomain: '@snaplite-test.invalid' });
   const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 4 } });
   const TEST_DOMAIN = '@snaplite-test.invalid';
 
@@ -33,7 +34,7 @@ module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
       token TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, biz_id INT NOT NULL, expires TIMESTAMPTZ NOT NULL)`);
     await pool.query('ALTER TABLE biz_sessions ADD COLUMN IF NOT EXISTS user_id INT');
     await pool.query('DELETE FROM biz_sessions WHERE expires < now()');
-    await legalMod.init();
+    await legalMod.init(); await standingMod.init();
   }
 
   // ---------- sessions ----------
@@ -144,6 +145,7 @@ ${joinBlock()}`);
     const crew = u.role === 'owner' ? (await pool.query(`SELECT id,email,name,created_at FROM users WHERE biz_id=$1 AND role='crew' AND deleted_at IS NULL ORDER BY id`, [u.biz_id])).rows : [];
     const people = u.role === 'owner' ? (await pool.query(`SELECT id,email,role FROM users WHERE biz_id=$1 AND id<>$2 AND deleted_at IS NULL ORDER BY id`, [u.biz_id, u.id])).rows : [];
     const rgv = u.role === 'owner' ? await regFor(pool, SKIN).get() : null;
+    const stv = u.role === 'owner' ? await standingMod.get() : null;
     const prof = u.role === 'owner' ? await profileMod.get() : null, lg = u.role === 'owner' ? await legalMod.status(u.id) : null, hasLogo = logo.custom();
     const q = req.query, flash = over.flash != null ? over.flash : { invited: '', keys: 'Keys saved.', reg: 'Checked against the Environment Agency register and saved.', reglower: 'Saved. This is a lower tier registration, which covers your own waste only, so the registered-carrier mark is left off your videos.', regnone: "Not saved: that number isn't on the Environment Agency register. Check it against your registration certificate and try again.", regoffline: "Saved, but we couldn't reach the Environment Agency register just now, so it hasn't been checked. Tap Check again in a few minutes.", regcleared: 'Registration removed. No mark is shown on your videos.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: a registration number is letters then numbers, for example CBDU123456, and an expiry date must be a real date.', bizsaved: 'Business details saved.', exportbad: 'Those dates are not real dates. Pick them from the calendar, or leave them empty.', exportorder: 'The From date is after the To date. Swap them and try again.', siteadded: 'Site added.', siteremoved: 'Site removed.', sitebad: 'Not added. Give the site a name, and check the licence number (letters and numbers only) and that it is not already in the list.', logook: 'Logo saved. It is used on videos you make from now on.', logoreset: 'Standard logo put back.', logobad: "That file couldn't be read as a picture. Use a PNG or JPG.", accepted: 'Thank you. Your acceptance is saved.', acceptnone: 'Tick the box next to each one you accept, then tap Accept.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
@@ -154,6 +156,10 @@ ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
 <form class="card" method="post" action="/settings/invite"><label class="f">Crew email<input name="email" type="email" required inputmode="email"></label><button type="submit">Create crew login</button><span class="small">Crew can take photos and make videos. Only you can approve and share.</span></form>` : ''}
 ${u.role === 'owner' && people.length ? `<h2>Reset someone's password</h2><div class="jobs">${people.map(c => `<div class="card"><b>${esc(c.email)}</b> <span class="small">(${c.role})</span><form method="post" action="/settings/users/${c.id}/reset" onsubmit="return confirm('Reset this password? They will be signed out.')"><button class="sec small" type="submit">Reset password</button></form></div>`).join('')}</div>` : ''}
+${stv ? `<div class="card" id="standing"><h2 style="margin-top:0">Clean Up UK</h2>${stv.campaign_eligible ? '<p style="margin:0"><b>✔ Clean Up UK Pledged</b></p><p class="small" style="margin:0">You have ticked the Pledge and your registration is checked, so you can be sent enquiries through Clean Up UK.</p>'
+ : stv.reported ? '<p style="margin:0"><b>Your Clean Up UK listing is paused</b></p><p class="small" style="margin:0">A report is being looked at. Your videos are still made, without the registered-carrier mark, until it is settled.</p>'
+ : stv.flag === 'confirmed' ? `<p style="margin:0"><b>${esc(stv.removed_text || 'Removed from Clean Up UK')}</b></p><p class="small" style="margin:0">You are no longer on Clean Up UK. Your videos are still made, without the registered-carrier mark.</p>`
+ : `<p style="margin:0"><b>Not on Clean Up UK yet</b></p><p class="small" style="margin:0">${!stv.pledged ? 'Tick the Clean Up UK Pledge in the box above. ' : ''}${!stv.verified ? 'Save a registration number and check it against the register, in the box above. ' : ''}Your own videos and quote button work either way.</p>`}</div>` : ''}
 ${rgv ? `<h2>Waste carrier registration</h2>
 <form class="card" method="post" action="/settings/registration"><p class="small" style="margin:0">Type your registration number. We check it against the Environment Agency register and fill in the rest. While it is current, a small mark shows on every new video and on the end card. It comes off the day after the expiry date. Videos already made are not changed.</p>
 <label class="f">Registration number<input name="number" maxlength="20" autocapitalize="characters" value="${esc(rgv.number)}" placeholder="CBDU123456"></label>
@@ -161,7 +167,7 @@ ${rgv ? `<h2>Waste carrier registration</h2>
 ${rgv.checked ? `<p class="small" style="margin:0"><b>Checked against the Environment Agency register on ${esc(rgv.checkedNice)}</b></p>
 ${rgv.note === 'unreachable' ? `<p class="small" style="margin:0;color:#b00020">The last nightly check could not reach the register, so these details are from ${esc(rgv.checkedNice)}. We try again every night.</p>` : rgv.note === 'notfound' ? `<p class="small" style="margin:0;color:#b00020">The register no longer shows this number. These details are from ${esc(rgv.checkedNice)}. Please check it with the Environment Agency.</p>` : ''}
 <p class="small" style="margin:0">Registered name: ${esc(rgv.registerName)}<br>Tier: ${rgv.tier === 'lower' ? 'Lower' : 'Upper'}${rgv.company ? `<br>Company number: ${esc(rgv.company)}` : ''}${rgv.registeredNice ? `<br>Registered on: ${esc(rgv.registeredNice)}` : ''}<br>Expires on: ${esc(rgv.expiryNice)}</p>` : rgv.number ? '<p class="small" style="margin:0">Not checked against the register yet. Tap Save and check.</p>' : ''}
-<p class="small" style="margin:0">${rgv.lower ? 'Lower tier covers your own waste only, so no registered-carrier mark is shown on your videos.' : rgv.active ? `On every new video until ${esc(rgv.expiryNice)}: <b>${esc(rgv.text)}</b>` : rgv.expired ? `Expired on ${esc(rgv.expiryNice)}, so no mark is shown.` : 'No mark is shown until a registration number is saved.'}</p>
+<p class="small" style="margin:0">${rgv.withheld ? 'No registered-carrier mark is shown on your videos while your Clean Up UK listing is under review. Your videos are still made.' : rgv.lower ? 'Lower tier covers your own waste only, so no registered-carrier mark is shown on your videos.' : rgv.active ? `On every new video until ${esc(rgv.expiryNice)}: <b>${esc(rgv.text)}</b>` : rgv.expired ? `Expired on ${esc(rgv.expiryNice)}, so no mark is shown.` : 'No mark is shown until a registration number is saved.'}</p>
 <button type="submit">Save and check</button></form>
 ${rgv.overridden ? '<form method="post" action="/settings/registration/reset"><button class="sec" type="submit">Put back the standard details</button></form>' : ''}
 <h2>Your business</h2>
@@ -273,6 +279,10 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
     res.set('Cache-Control', 'no-cache').send(page(d.title, `${mdHtml(d.body)}<p class="small">${esc(SKIN.name)} · version ${d.version}</p><p><a class="btn sec" href="/">Back to the app</a></p>`)); });
 
   // Terms, privacy and the Pledge: the owner ticks; we keep who accepted which version, and when. Used by Settings and by the banner on Home.
+  app.get('/standing.json', async (req, res, next) => { try {
+    const s = await standingMod.get();
+    res.set({ 'Cache-Control': 'public, max-age=300', 'Access-Control-Allow-Origin': '*', 'X-Robots-Tag': 'noindex' }).json(standingMod.publicJson(s, `https://${req.get('host')}`));
+  } catch (e) { next(e); } });
   app.post('/settings/accept', sameOrigin, needUser(), needOwner, express.urlencoded({ extended: false, limit: '10kb' }), async (req, res, next) => { try {
     const back = req.body && req.body.back === '/' ? '/' : '/settings', done = await legalMod.accept(req.user, req.body && req.body.doc);
     if (done.length) events('accepted', req.user.id, null, done.join(','));
@@ -370,5 +380,5 @@ ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are swit
 
   app.get('/api/version', (req, res) => res.set('Cache-Control', 'no-store').json({ version: process.env.APP_VERSION || 'dev', apk: process.env.ANDROID_APK_URL || '' }));
 
-  return { init, current, needUser, needOwner, legal: legalMod, profile: profileMod, logo, createUser, ensureBusiness, softDelete, TEST_DOMAIN };
+  return { init, current, needUser, needOwner, legal: legalMod, profile: profileMod, standing: standingMod, logo, createUser, ensureBusiness, softDelete, TEST_DOMAIN };
 };
