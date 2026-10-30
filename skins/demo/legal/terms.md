@@ -1,9 +1,9 @@
-Version: 2
+Version: 3
 # Terms of use
 
 *First draft, in plain English. To be reviewed before it is relied on.*
 
-These are the terms for using CleanUpSnap and Clean Up UK ("we", "us"), including the Snap apps built for waste carriers. By ticking to accept, the business owner agrees to them for the business.
+These are the terms for using CleanUpSnap and Clean Up UK ("we", "us"), which are run by XpressIQ Limited, including the Snap apps built for waste carriers. By ticking to accept, the business owner agrees to them for the business.
 
 ## Who can use it
 - The app is for waste carriers registered in England (or the equivalent register elsewhere in the UK). You must give us your registration number and keep it current.
@@ -37,4 +37,4 @@ These are the terms for using CleanUpSnap and Clean Up UK ("we", "us"), includin
 - Our responsibility to you is limited to what the law allows. Nothing here limits anything the law does not allow us to limit.
 
 ## Contact
-[contact details to be added]
+Email: hello@cleanuppic.co.uk

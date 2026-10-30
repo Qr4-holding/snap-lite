@@ -1013,9 +1013,9 @@ async function phaseIntake1() {
   ok('plates are shown with the space (AB12 CDE)', P.platePretty('AB12CDE') === 'AB12 CDE' && P.platePretty('K1') === 'K1');
   // versions
   const D = L.docs({});
-  ok('the Pledge has the five standard lines, Terms version 2 and Privacy version 3 by default', D.pledge.lines.length === 5 && D.pledge.version === 1 && D.terms.version === 2 && D.privacy.version === 3);
-  const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 2 } } });
-  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 2 && D2.privacy.version === 3);
+  ok('the Pledge has the five standard lines, Terms version 3 and Privacy version 4 by default', D.pledge.lines.length === 5 && D.pledge.version === 1 && D.terms.version === 3 && D.privacy.version === 4);
+  const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 7 } } });
+  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 7 && D2.privacy.version === 4);
   if (process.env.LOCAL_DATABASE_URL) await legalDb();
   // the three pages are served by the app itself, to anyone, with no sign-in
   for (const k of ['terms', 'privacy', 'pledge']) {
@@ -1032,7 +1032,7 @@ async function legalDb() {
   const { Pool } = require('pg'), pool = new Pool({ connectionString: process.env.LOCAL_DATABASE_URL }), L = require('../lib/legal');
   try {
     await pool.query('DROP TABLE IF EXISTS acceptances');
-    const v1 = L(pool, { legal: { terms: { version: 1 } } }), v2 = L(pool, { legal: { terms: { version: 3 } } });
+    const v1 = L(pool, { legal: { terms: { version: 1 } } }), v2 = L(pool, { legal: { terms: { version: 4 } } });
     await v1.init();
     const u = { id: 1, email: 'o@x.test' };
     ok('db: nothing accepted yet means three pending', (await v1.pending(1)).length === 3);
