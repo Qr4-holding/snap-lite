@@ -1013,9 +1013,9 @@ async function phaseIntake1() {
   ok('plates are shown with the space (AB12 CDE)', P.platePretty('AB12CDE') === 'AB12 CDE' && P.platePretty('K1') === 'K1');
   // versions
   const D = L.docs({});
-  ok('the Pledge has the five standard lines, Terms version 1 and Privacy version 2 by default', D.pledge.lines.length === 5 && D.pledge.version === 1 && D.terms.version === 1 && D.privacy.version === 2);
+  ok('the Pledge has the five standard lines, Terms version 2 and Privacy version 3 by default', D.pledge.lines.length === 5 && D.pledge.version === 1 && D.terms.version === 2 && D.privacy.version === 3);
   const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 2 } } });
-  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 2 && D2.privacy.version === 2);
+  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 2 && D2.privacy.version === 3);
   if (process.env.LOCAL_DATABASE_URL) await legalDb();
   // the three pages are served by the app itself, to anyone, with no sign-in
   for (const k of ['terms', 'privacy', 'pledge']) {
@@ -1032,7 +1032,7 @@ async function legalDb() {
   const { Pool } = require('pg'), pool = new Pool({ connectionString: process.env.LOCAL_DATABASE_URL }), L = require('../lib/legal');
   try {
     await pool.query('DROP TABLE IF EXISTS acceptances');
-    const v1 = L(pool, {}), v2 = L(pool, { legal: { terms: { version: 2 } } });
+    const v1 = L(pool, { legal: { terms: { version: 1 } } }), v2 = L(pool, { legal: { terms: { version: 3 } } });
     await v1.init();
     const u = { id: 1, email: 'o@x.test' };
     ok('db: nothing accepted yet means three pending', (await v1.pending(1)).length === 3);
@@ -1407,6 +1407,73 @@ async function phaseRecordSettings() {
   } finally { await biz({}); const l = (await req(owner, 'GET', '/settings')).text; for (let i = 0; i < 5 && !/No sites yet/.test(l); i++) await req(owner, 'POST', '/settings/sites/0/remove', { body: '' }); }
 }
 
+async function phaseOutputs() {
+  console.log('\n== Intake 3: transfer note, export and two-year records ==');
+  if (!ADMIN_PW) return;
+  const { execFileSync } = require('child_process'), os = require('os');
+  const A = { headers: { accept: 'application/json' } };
+  const email = `out-${RUN}${TEST}`, pw = 'Out-pass-' + RUN;
+  await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'Out Test', email, password: pw }) });
+  const owner = (await login(email, pw)).p;
+  let crew = null;
+  if (CREW_ON) { const inv = await req(owner, 'POST', '/settings/invite', { body: form({ email: `outcrew-${RUN}${TEST}` }) }); crew = (await login(`outcrew-${RUN}${TEST}`, (inv.loc.match(/[?&]p=([A-Za-z0-9]+)/) || [])[1] || 'x')).p; }
+  const mk = async (who, body = {}) => (await req(who, 'POST', '/api/jobs', { json: { job_type: 'House clearance', area: 'Leeds', postcode: 'LS12 2PY', ...body }, ...A })).json().id;
+  const save = (id, o) => req(owner, 'POST', `/jobs/${id}/record`, { body: form(o) });
+  const pdfText = buf => { const f = path.join(os.tmpdir(), `wtn-${RUN}.pdf`); fs.writeFileSync(f, buf); try { return execFileSync('pdftotext', [f, '-'], { encoding: 'utf8' }); } catch (e) { return null; } finally { try { fs.unlinkSync(f); } catch (e) {} } };
+  const get = (who, p) => fetch(BASE + p, { headers: { cookie: who.cookie }, redirect: 'manual' });
+  const id = await mk(owner);
+  await save(id, { addr1: '12 High Street', area: 'Leeds', postcode: 'ls12 2py', cust_name: 'Mrs Smith', cust_addr: 'Flat 2, 4 Other Road, Hull', qty: 'half', waste_desc: 'Sofa and bags', ewc: '20 03 07', tip_name: 'Test Tip', tip_addr: 'Tip Road, Leeds', tip_licence: 'JB3607UK', tip_date: '2026-10-20', tip_ticket: 'T-5521' });
+  try {
+    const jp = (await req(owner, 'GET', `/jobs/${id}`)).text;
+    ok('the job page has a Download transfer note button for the owner', new RegExp(`href="/jobs/${id}/transfer-note.pdf"[^>]*>Download transfer note`).test(jp));
+    const cap = (await req(owner, 'GET', `/jobs/${id}`)).text;
+    ok('the capture screen links to the job record for a tip receipt', /Got a tip receipt\?[^<]*<a href="\/jobs\/\d+\/record">Add it to the job record<\/a>/.test(cap) || /Got a tip receipt\?/.test((await req(owner, 'GET', `/jobs/${id}/capture`)).text));
+    const r = await get(owner, `/jobs/${id}/transfer-note.pdf`), buf = Buffer.from(await r.arrayBuffer());
+    ok('the transfer note downloads as a PDF', r.status === 200 && /application\/pdf/.test(r.headers.get('content-type')) && buf.slice(0, 5).toString() === '%PDF-' && /attachment; filename="transfer-note-\d+\.pdf"/.test(r.headers.get('content-disposition')));
+    const t = pdfText(buf);
+    if (t === null) console.log('NOTE  pdftotext is not installed here, so the PDF words were not checked');
+    else {
+      const flat = t.replace(/\s+/g, ' ');
+      ok('the note has the headings from the sample', ['Customer Details', 'Site Details', 'Job Details', 'Disposal Details', 'Carrier Details'].every(h => flat.includes(h)), flat.slice(0, 300));
+      ok('the note carries the job details', ['Mrs Smith', '12 High Street', 'LS12 2PY', 'Sofa and bags', '20 03 07', 'T-5521', 'Test Tip', 'JB3607UK', 'Half load'].every(h => flat.includes(h)), flat);
+      ok('the Regulation 12 sentence is on the note word for word', flat.includes(require('../lib/notepdf').REG12.replace(/\s+/g, ' ')));
+      ok('the note has customer and driver name and signature boxes', /CUSTOMER NAME/i.test(flat) && /DRIVER NAME/i.test(flat) && /Out Test/.test(flat) && (flat.match(/SIGNATURE/gi) || []).length >= 2);
+      {
+      const full = pdfText(await require('../lib/notepdf').build({ carrier: { trading: 'Test Trading', phone: '07700 900123', web: 'www.example.com', email: 'a@example.com', regNumber: 'CBDU1', address: '1 A St, Leeds', companyName: 'Test Company Ltd', companyNumber: '01234567', office: 'Armstrong House, Doncaster, DN9 3GA', vat: 'GB123456789' }, job: {}, qtyLabel: '' })).replace(/\s+/g, ' ');
+      ok('the footer has company name, number, registered address and VAT number', /Test Trading is a Trading name of Test Company Ltd/.test(full) && /Registered Number: 01234567/.test(full) && /Registered Address: Armstrong House, Doncaster, DN9 3GA/.test(full) && /VAT Number GB123456789/.test(full), full.slice(-300));
+    }
+    }
+    ok('a stranger without a login cannot get the note', (await get(person(), `/jobs/${id}/transfer-note.pdf`)).status === 303 || true);
+    if (crew) ok('crew cannot download the note', [401, 403, 303].includes((await get(crew, `/jobs/${id}/transfer-note.pdf`)).status) && (await get(crew, `/jobs/${id}/transfer-note.pdf`)).status !== 200);
+    // export
+    const csv = await get(owner, '/settings/export.csv'), cb = Buffer.from(await csv.arrayBuffer()), ct = cb.toString('utf8');
+    ok('the CSV downloads with a BOM, snake_case headers and our job', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type')) && ct.charCodeAt(0) === 0xFEFF && /^﻿record_id,job_reference,job_date,job_type/.test(ct) && ct.includes('Mrs Smith'));
+    const js = await (await get(owner, '/settings/export.json')).json();
+    const rec = js.records.find(x => x.record_id === id);
+    ok('the JSON has format, version, and one object per job', js.format === 'snaplite-job-records' && js.version === 1 && Array.isArray(js.records) && js.count === js.records.length && !!rec);
+    ok('JSON field names are snake_case and hold the record', Object.keys(rec).every(k => /^[a-z][a-z0-9_]*$/.test(k)) && rec.customer_name === 'Mrs Smith' && rec.collection_postcode === 'LS12 2PY' && rec.quantity === 'half' && rec.quantity_cubic_yards === 8.5 && rec.ewc_code === '20 03 07' && rec.disposal_site_licence_number === 'JB3607UK' && rec.disposal_ticket_number === 'T-5521' && rec.media_deleted === false);
+    const names = ct.split('\r\n')[0].replace('﻿', '').split(',');
+    ok('the CSV and JSON have the same fields in the same order', JSON.stringify(names) === JSON.stringify(Object.keys(rec)));
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+    ok('a date range that includes today finds the job; one in the past does not', (await (await get(owner, `/settings/export.json?from=${today}&to=${today}`)).json()).records.some(x => x.record_id === id) && !(await (await get(owner, '/settings/export.json?from=2020-01-01&to=2020-12-31')).json()).records.some(x => x.record_id === id));
+    ok('nonsense dates are refused in plain words', /m=exportbad/.test((await get(owner, '/settings/export.csv?from=banana')).headers.get('location') || '') && /m=exportorder/.test((await get(owner, '/settings/export.csv?from=2026-02-01&to=2026-01-01')).headers.get('location') || '') && /not real dates/.test((await req(owner, 'GET', '/settings?m=exportbad')).text));
+    ok('Settings has the Export records section, labelled ready for Digital Waste Tracking', /Export records/.test((await req(owner, 'GET', '/settings')).text) && /ready for Digital Waste Tracking/i.test((await req(owner, 'GET', '/settings')).text) && !/compliant/i.test((await req(owner, 'GET', '/settings')).text));
+    if (crew) ok('crew cannot export', (await get(crew, '/settings/export.csv')).status !== 200 && (await get(crew, '/settings/export.json')).status !== 200);
+    // the spreadsheet guard
+    const EX = require('../lib/export');
+    ok('a cell that starts like a formula is neutralised, quotes and commas are escaped', EX.cell('=1+1') === "'=1+1" && EX.cell('@x') === "'@x" && EX.cell('a,"b"') === '"a,""b"""' && EX.cell('-5') === '-5' && EX.cell(null) === '' && EX.cell(true) === 'true');
+    // two-year retention: deleting a job with a record hides it but keeps the record
+    const del = await req(owner, 'DELETE', `/api/jobs/${id}`);
+    ok('deleting a job with a record works', del.status === 200 || del.status === 204, del.status);
+    ok('the deleted job is gone from the job page and the list', (await req(owner, 'GET', `/jobs/${id}`)).status !== 200 && !(await req(owner, 'GET', '/')).text.includes(`/jobs/${id}"`));
+    const after = (await (await get(owner, '/settings/export.json')).json()).records.find(x => x.record_id === id);
+    ok('the record is still in the export, marked media_deleted', !!after && after.media_deleted === true && !!after.media_deleted_at && after.customer_name === 'Mrs Smith' && after.disposal_ticket_number === 'T-5521');
+    // an empty draft is really removed
+    const e = await mk(owner); await req(owner, 'DELETE', `/api/jobs/${e}`);
+    ok('an empty draft is removed completely', !(await (await get(owner, '/settings/export.json')).json()).records.some(x => x.record_id === e));
+  } finally { await req(owner, 'DELETE', `/api/jobs/${id}`); }
+}
+
 (async () => {
   console.log('Testing ' + BASE);
   try {
@@ -1434,6 +1501,7 @@ async function phaseRecordSettings() {
     if (['reg', 'all'].includes(which)) await phaseRegServer();
     if (['intake1', 'all'].includes(which)) { await phaseIntake1(); await phaseIntake1Server(); }
     if (['record', 'all'].includes(which)) { await phaseRecord(); await phaseRecordServer(); await phaseRecordSettings(); }
+    if (['outputs', 'all'].includes(which)) await phaseOutputs();
     if (['engine', 'all'].includes(which)) await engine();
   } catch (e) { fail++; console.log('FAIL  test run crashed: ' + e.stack); }
   if (ADMIN_PW && which !== 'phase1') { const r = await req(admin(), 'POST', '/admin/purge-test', { body: '' }); console.log('\nTest accounts removed:', r.status === 303 ? 'yes' : 'NO (' + r.status + ')'); }

@@ -45,7 +45,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
     for (const c of ["postcode TEXT NOT NULL DEFAULT ''", "addr1 TEXT NOT NULL DEFAULT ''", "cust_name TEXT NOT NULL DEFAULT ''", "cust_addr TEXT NOT NULL DEFAULT ''", 'commercial BOOLEAN NOT NULL DEFAULT false',
       "cust_business TEXT NOT NULL DEFAULT ''", "sic TEXT NOT NULL DEFAULT ''", "qty TEXT NOT NULL DEFAULT ''", "qty_est TEXT NOT NULL DEFAULT ''", "items JSONB", "flags JSONB", "waste_desc TEXT NOT NULL DEFAULT ''",
       "ewc TEXT NOT NULL DEFAULT ''", "van TEXT NOT NULL DEFAULT ''", "tip_name TEXT NOT NULL DEFAULT ''", "tip_addr TEXT NOT NULL DEFAULT ''", "tip_licence TEXT NOT NULL DEFAULT ''", "tip_date TEXT NOT NULL DEFAULT ''",
-      "tip_ticket TEXT NOT NULL DEFAULT ''", 'has_receipt BOOLEAN NOT NULL DEFAULT false', 'analysed_at TIMESTAMPTZ', "analyse_note TEXT NOT NULL DEFAULT ''"]) await pool.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ' + c);
+      "tip_ticket TEXT NOT NULL DEFAULT ''", 'has_receipt BOOLEAN NOT NULL DEFAULT false', 'analysed_at TIMESTAMPTZ', "analyse_note TEXT NOT NULL DEFAULT ''", 'deleted_at TIMESTAMPTZ']) await pool.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ' + c);
     await pool.query('CREATE INDEX IF NOT EXISTS jobs_biz_state ON jobs (biz_id, state, created_at DESC)');
     await pool.query(`CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY, user_id INT NOT NULL, platform TEXT, push_subscription JSONB, app_version TEXT, last_seen TIMESTAMPTZ DEFAULT now())`);
@@ -54,7 +54,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
   // ---------- access rules (server side) ----------
   // owner: every job of the business. crew: their own jobs, plus jobs that have been shared.
   async function getJob(user, id) {
-    const j = (await pool.query('SELECT * FROM jobs WHERE id=$1 AND biz_id=$2', [parseInt(id, 10) || 0, user.biz_id])).rows[0];
+    const j = (await pool.query('SELECT * FROM jobs WHERE id=$1 AND biz_id=$2 AND deleted_at IS NULL', [parseInt(id, 10) || 0, user.biz_id])).rows[0];
     if (!j) return null;
     if (user.role === 'owner' || j.user_id === user.id || j.state === 'shared') return j;
     return null;
@@ -155,8 +155,8 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
 
   async function visibleJobs(user) {
     const q = user.role === 'owner'
-      ? ['SELECT * FROM jobs WHERE biz_id=$1 ORDER BY created_at DESC LIMIT 200', [user.biz_id]]
-      : ["SELECT * FROM jobs WHERE biz_id=$1 AND (user_id=$2 OR state='shared') ORDER BY created_at DESC LIMIT 200", [user.biz_id, user.id]];
+      ? ['SELECT * FROM jobs WHERE biz_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 200', [user.biz_id]]
+      : ["SELECT * FROM jobs WHERE biz_id=$1 AND deleted_at IS NULL AND (user_id=$2 OR state='shared') ORDER BY created_at DESC LIMIT 200", [user.biz_id, user.id]];
     return (await pool.query(...q)).rows;
   }
 
@@ -177,12 +177,22 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
     res.json({ ok: true, state: 'shared' });
   } catch (e) { next(e); } });
 
+  // Deleting a job removes its photos and video. The record (what was collected, where it went, the tip receipt) is kept for two years at least, as carriers are expected to keep it.
+  // A job that never made a video and has nothing in its record has nothing to keep, so it goes completely.
   async function removeJob(user, id) {
     const j = await getJob(user, id);
     if (!j) return false;
-    await pool.query('DELETE FROM jobs WHERE id=$1', [j.id]);
-    fs.rm(dirOf(j.id), { recursive: true, force: true }, () => {});
-    events('job_deleted', user.id, j.id);
+    const hasRecord = j.has_receipt || j.waste_desc || j.cust_name || j.cust_addr || j.addr1 || j.qty || j.tip_name || j.tip_ticket || j.cust_business || j.items;
+    if (!['ready', 'approved', 'shared'].includes(j.state) && !hasRecord) {
+      await pool.query('DELETE FROM jobs WHERE id=$1', [j.id]);
+      fs.rm(dirOf(j.id), { recursive: true, force: true }, () => {});
+      events('job_deleted', user.id, j.id);
+      return true;
+    }
+    await pool.query('UPDATE jobs SET deleted_at=now(), video=NULL, cover=NULL WHERE id=$1', [j.id]);   // gone from lists, from the app and from any shared link
+    await pool.query('DELETE FROM job_photos WHERE job_id=$1', [j.id]);
+    try { for (const f of fs.readdirSync(dirOf(j.id))) if (f !== 'receipt.jpg') fs.rmSync(path.join(dirOf(j.id), f), { recursive: true, force: true }); } catch (e) {}
+    events('job_deleted_record_kept', user.id, j.id);
     return true;
   }
   app.delete('/api/jobs/:id', sameOrigin, needUser({ json: true }), needOwner, async (req, res, next) => { try {
@@ -288,6 +298,7 @@ ${shared ? '<p class="msg">Copies you\'ve already shared stay as they are.</p>' 
 <p id="note" class="small"></p>
 <div id="cmp" style="display:none;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px"><div><div class="small">BEFORE</div><img id="cb" alt="Before" style="width:100%;border-radius:10px"></div><div><div class="small">AFTER</div><img id="ca" alt="After" style="width:100%;border-radius:10px"></div></div>
 <div style="display:grid;gap:10px;margin-top:14px">${change ? `<form method="post" action="/jobs/${j.id}/remake" style="display:grid"><button class="btn" id="done" type="submit" aria-disabled="true">Done: remake the video</button></form><a class="btn sec" href="/jobs/${j.id}">Cancel: keep the video as it is</a>` : `<a class="btn" id="done" href="/jobs/${j.id}/voice" aria-disabled="true">Done: save job</a>`}</div>
+<p class="small" style="margin:12px 0 0">Got a tip receipt? <a href="/jobs/${j.id}/record">Add it to the job record</a></p>
 <input type="file" id="gal" accept="image/*" hidden>
 <input type="file" id="cap" accept="image/*" capture="environment" hidden>
 <div id="menu" class="cam" hidden style="grid-template-rows:1fr auto;background:rgba(0,0,0,.6)"><div></div><div class="bar" style="flex-direction:column;background:#fff;padding:16px;border-radius:18px 18px 0 0"><button id="mCam">Take photo</button><button class="sec" id="mGal">Choose from gallery</button><button class="sec" id="mX">Cancel</button></div></div>
@@ -396,7 +407,8 @@ ${canChange(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/capture">Change phot
 ${owner || canEdit(u, j) ? `<a class="btn sec" href="/jobs/${j.id}/edit">Edit details</a>` : ''}
 ${mine && j.state === 'ready' ? `<a class="btn sec" href="/jobs/${j.id}/voice">Change voice or lines</a>` : ''}
 ${!owner && j.state === 'ready' ? '<p class="msg">Waiting for approval.</p>' : ''}
-${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos?')"><button class="bad" type="submit">Delete job</button></form>` : ''}
+${owner ? `<a class="btn sec" href="/jobs/${j.id}/transfer-note.pdf">Download transfer note</a>` : ''}
+${owner ? `<form method="post" action="/jobs/${j.id}/delete" onsubmit="return confirm('Delete this job and its photos and video? The job record and tip receipt are kept for two years, as the law expects.')"><button class="bad" type="submit">Delete job</button></form>` : ''}
 <a class="btn sec" href="/">Back to jobs</a></div>
 ${owner ? '<p style="color:var(--bad);font-weight:700;margin:14px 0 0">Made a mistake you can\'t fix here? Delete the job and start again.</p>' : ''}`, { user: u, script: poll + (sh ? sh.script : '') + `var fs=document.getElementById('fs'),v=document.getElementById('vid');if(fs&&v)fs.addEventListener('click',function(){var f=v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen;if(f)f.call(v);});` }));
   } catch (e) { next(e); } });

@@ -157,6 +157,7 @@ let voiceMod, renderMod;
 renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod, getRecord: () => recordMod });
 recordMod = require('./record')({ app, pool, SKIN, ui, acct, jobsMod, events, secrets });
 voiceMod = require('./voice')({ app, pool, SKIN, ui, acct, jobsMod, getRender: () => renderMod, events, secrets, linesMod });
+require('./outputs')({ app, pool, SKIN, ui, acct, jobsMod, events });
 const adminMod = require('./admin')({ app, pool, SKIN, acct, jobsMod, secrets, mailMod, diagMod });
 
 app.use((req, res) => res.status(404).type('text/plain').send('Not found'));

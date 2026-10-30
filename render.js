@@ -45,7 +45,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
   }
 
   async function renderJob(id) {
-    const j = (await pool.query('SELECT * FROM jobs WHERE id=$1', [id])).rows[0];
+    const j = (await pool.query('SELECT * FROM jobs WHERE id=$1 AND deleted_at IS NULL', [id])).rows[0];
     if (!j || j.state !== 'rendering') return;
     const dir = jobsMod.dirOf(id), t0 = Date.now();
     try {
@@ -119,7 +119,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
 
   async function init() {
     // anything left "rendering" by a restart goes back in the queue
-    const r = (await pool.query("SELECT id FROM jobs WHERE state='rendering' ORDER BY id")).rows;
+    const r = (await pool.query("SELECT id FROM jobs WHERE state='rendering' AND deleted_at IS NULL ORDER BY id")).rows;
     r.forEach(x => queue.push(x.id)); if (r.length) { console.log('Re-queued renders:', r.map(x => x.id).join(',')); pump(); }
   }
   return { init, enqueue, start };

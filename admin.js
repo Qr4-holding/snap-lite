@@ -52,7 +52,7 @@ table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px
     const keyState = { el: await secrets.has('elevenlabs_key'), an: await secrets.has('anthropic_key'), mail: await mailMod.configured() };
     const b = (await pool.query('SELECT * FROM businesses WHERE slug=$1', [SKIN.id])).rows[0];
     const users = b ? (await pool.query('SELECT id,email,role,created_at,deleted_at FROM users WHERE biz_id=$1 ORDER BY id', [b.id])).rows : [];
-    const counts = (await pool.query('SELECT state, count(*)::int n FROM jobs GROUP BY state ORDER BY state')).rows;
+    const counts = (await pool.query('SELECT state, count(*)::int n FROM jobs WHERE deleted_at IS NULL GROUP BY state ORDER BY state')).rows;
     const flash = { owner: ['Owner created.', 0], bad: [req.query.why || 'Not saved.', 1], pw: ['Sign-in details saved. Use them next time.', 0], pwbad: ['Not saved: wrong current password, or the new passwords do not match or are under 12 characters.', 1], purged: ['Test data removed.', 0], keys: ['Keys saved.', 0] }[req.query.m];
     res.set('Cache-Control', 'no-store').send(shell('Overview', `<h1>${esc(SKIN.name)} admin</h1>
 ${flash ? `<p class="${flash[1] ? 'bad' : 'ok'}">${esc(flash[0])}</p>` : ''}

@@ -1,4 +1,4 @@
-Version: 2
+Version: 3
 # Privacy notice
 
 *First draft, in plain English. To be reviewed before it is relied on.*
@@ -27,7 +27,7 @@ When you share a video, anyone with the link can see it, and it may be posted wh
 - We do not sell your data. We may use anonymised, combined information for research and reporting, as set out in the Terms.
 
 ## How long
-- Job records: at least two years. If you delete a job's photos and video, the record stays.
+- Job records: at least two years. If you delete a job, its photos and video are removed. The record and the tip receipt photo stay for at least two years, and are not shown anywhere except to you in your records export.
 - Account details: until you delete your account. Your jobs stay with the business record.
 
 ## Your rights under UK GDPR

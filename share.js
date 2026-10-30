@@ -34,7 +34,7 @@ module.exports = function share({ app, pool, SKIN, ui, acct, jobsMod, events }) 
   async function bySig(req) {
     const slug = String(req.params.slug || ''); if (!/^[a-f0-9]{12}$/.test(slug)) return null;
     if (!verify(secret, slug, req.query.e, String(req.query.s || ''))) return null;
-    const j = (await pool.query('SELECT * FROM jobs WHERE slug=$1', [slug])).rows[0];
+    const j = (await pool.query('SELECT * FROM jobs WHERE slug=$1 AND deleted_at IS NULL', [slug])).rows[0];
     return shareable(j) ? j : null;
   }
   const q = req => `e=${encodeURIComponent(req.query.e)}&s=${encodeURIComponent(req.query.s)}`;

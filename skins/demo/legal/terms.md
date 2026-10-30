@@ -1,4 +1,4 @@
-Version: 1
+Version: 2
 # Terms of use
 
 *First draft, in plain English. To be reviewed before it is relied on.*
@@ -28,7 +28,7 @@ These are the terms for using CleanUpSnap and Clean Up UK ("we", "us"), includin
 - We may use anonymised, combined information from jobs and the items collected (for example what kinds of waste are collected, in what quantities, and how often) for research and reporting. It will not identify you, your customers or an address.
 
 ## Records
-- We keep each job's record for at least two years, even if you delete the photos and video, because carriers are expected to keep their waste records.
+- We keep each job's record for at least two years, even if you delete the photos and video, and we keep the tip receipt photo with it, because carriers are expected to keep their waste records.
 - The records export is made to help you with Digital Waste Tracking. It is not legal advice, and we do not promise that it meets every requirement. You stay responsible for your own legal duties.
 
 ## Our service
