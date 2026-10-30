@@ -1484,6 +1484,7 @@ async function phaseStanding() {
   const hook = (num, exp, tier) => req(admin(), 'POST', '/admin/test-registration', { body: form({ name: 'Test Carrier Ltd', number: num, expiry: exp, tier, checked: new Date().toISOString() }) });
   const rawFlag = (flag, at) => req(admin(), 'POST', '/admin/test-flag', { body: form({ flag, at }) });
   const flag = (action, note) => req(admin(), 'POST', '/admin/standing', { body: form({ action, note }) });
+  await req(admin(), 'POST', '/admin/purge-test', { body: '' });   // earlier phases leave test owners who ticked the Pledge
   await req(admin(), 'POST', '/admin/owner', { body: form({ name: 'St Test', email, password: pw }) });
   const owner = (await login(email, pw)).p;
   try {
