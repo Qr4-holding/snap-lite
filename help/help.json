@@ -1,7 +1,9 @@
 [
   { "id": "install", "title": "How to put the app on your phone", "public": true },
+  { "id": "first", "title": "First time in the app: Terms, Privacy and the Pledge" },
   { "id": "photos", "title": "Take the before and after photos" },
   { "id": "video", "title": "Make the video and choose a voice" },
   { "id": "share", "title": "Approve the video and share it" },
+  { "id": "record", "title": "The job record, tip receipt and transfer note" },
   { "id": "password", "title": "If you forget your password" }
 ]
