@@ -1,8 +1,10 @@
-Version: 1
-# The Clean Up UK Pledge
+Version: 2
+# I support Clean Up UK
 
-1. I am a registered waste carrier and will keep my registration current.
-2. Every load I collect goes to a licensed site, and I keep the receipt.
-3. I record every job here, before and after.
-4. I never fly-tip, and I report fly-tipping I find.
-5. I accept that proven fly-tipping ends my place on Clean Up UK and CleanUpSnap.
+What that means:
+
+1. I'm a registered waste carrier and keep my registration current.
+2. Every load goes to a licensed site and I keep the ticket.
+3. I log every job in the app.
+4. I don't fly-tip, and I report it when I see it.
+5. If fly-tipping is proven against me, I'm off Clean Up UK and off the app.

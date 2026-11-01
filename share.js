@@ -50,7 +50,7 @@ module.exports = function share({ app, pool, SKIN, ui, acct, jobsMod, events }) 
 <div style="display:grid;gap:10px;margin-top:16px;text-align:center">
 ${SKIN.phone ? `<a class="btn" href="tel:${esc(String(SKIN.phone).replace(/\s+/g, ''))}">Call ${esc(SKIN.phone)}</a>` : ''}
 ${SKIN.web ? `<a class="btn sec" href="https://${esc(SKIN.web)}">${esc(SKIN.web)}</a>` : ''}
-<p class="small">${esc(SKIN.name)}</p>${stand && stand.campaign_eligible ? '<p class="small" style="margin:0"><b>✔ Clean Up UK Pledged</b></p>' : ''}</div>`, { headExtra: head }));
+<p class="small">${esc(SKIN.name)}</p>${stand && stand.campaign_eligible ? '<p class="small" style="margin:0"><b>✔ Supports Clean Up UK</b></p>' : ''}</div>`, { headExtra: head }));
   } catch (e) { next(e); } });
   const media = (name, type) => async (req, res, next) => { try {
     const j = await bySig(req);

@@ -1013,7 +1013,7 @@ async function phaseIntake1() {
   ok('plates are shown with the space (AB12 CDE)', P.platePretty('AB12CDE') === 'AB12 CDE' && P.platePretty('K1') === 'K1');
   // versions
   const D = L.docs({});
-  ok('the Pledge has the five standard lines, Terms version 3 and Privacy version 4 by default', D.pledge.lines.length === 5 && D.pledge.version === 1 && D.terms.version === 3 && D.privacy.version === 4);
+  ok('the Pledge has the five standard lines, Terms version 3 and Privacy version 4 by default', D.pledge.lines.length === 5 && D.pledge.version === 2 && D.terms.version === 3 && D.privacy.version === 4);
   const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 7 } } });
   ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 7 && D2.privacy.version === 4);
   if (process.env.LOCAL_DATABASE_URL) await legalDb();
@@ -1025,7 +1025,7 @@ async function phaseIntake1() {
   const tp = (await req(person(), 'GET', '/terms')).text, pp = (await req(person(), 'GET', '/privacy')).text, pg = (await req(person(), 'GET', '/pledge')).text;
   ok('terms: registered carriers, licensed sites, platform ban, anonymised data for research', /registered/i.test(tp) && /licensed or permitted/.test(tp) && /end your place/.test(tp) && /anonymised, combined information/.test(tp));
   ok('privacy: what we store, videos public once shared, UK GDPR rights', /What we store/.test(pp) && /Videos are public once shared/.test(pp) && /UK GDPR/.test(pp));
-  ok('pledge: the five lines', (pg.match(/<li>/g) || []).length === 5 && /I never fly-tip, and I report fly-tipping I find\./.test(pg));
+  ok('pledge: the five lines', (pg.match(/<li>/g) || []).length === 5 && /I don't fly-tip, and I report it when I see it\./.test(pg));
 }
 // versions and "who accepted what, when" need a real database: runs only when LOCAL_DATABASE_URL points at a throw-away one
 async function legalDb() {
@@ -1083,10 +1083,10 @@ async function phaseIntake1Server() {
   const full = { trading: '', mobile: '', area: '', vans: '', ins_name: '', ins_expiry: '' };
   try {
     const s0 = (await req(owner, 'GET', '/settings')).text;
-    ok('owner sees business details, logo and the Pledge on Settings', /Your business/.test(s0) && /name="mobile"/.test(s0) && /name="vans"/.test(s0) && /type="file"/.test(s0) && /Clean Up UK Pledge/.test(s0));
+    ok('owner sees business details, logo and the Pledge on Settings', /Your business/.test(s0) && /name="mobile"/.test(s0) && /name="vans"/.test(s0) && /type="file"/.test(s0) && /I support Clean Up UK/.test(s0));
     if (crew) {
       const sc = (await req(crew, 'GET', '/settings')).text;
-      ok('crew see none of it', !/Your business/.test(sc) && !/name="mobile"/.test(sc) && !/Pledge/.test(sc) && !/Waste carrier registration/.test(sc));
+      ok('crew see none of it', !/Your business/.test(sc) && !/name="mobile"/.test(sc) && !/I support Clean Up UK/.test(sc) && !/Waste carrier registration/.test(sc));
       ok('crew cannot save business details, a logo or an acceptance', (await req(crew, 'POST', '/settings/business', { body: form(full) })).status === 403 && (await req(crew, 'POST', '/settings/accept', { body: form({ doc: 'terms' }) })).status === 403 && (await req(crew, 'POST', '/settings/logo/reset', { body: '' })).status === 403);
     }
     // business details
@@ -1150,7 +1150,7 @@ async function phaseIntake1Server() {
     ok('ticking only the Terms leaves the other two on the banner', (h1.match(/name="doc"/g) || []).length === 2 && !/value="terms"/.test(h1));
     const s3 = (await req(owner, 'GET', '/settings')).text;
     ok('Settings shows the Terms accepted with a date, not a tick box', s3.includes(`Accepted on ${(new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' })}`));
-    ok('the five Pledge lines are shown', /I am a registered waste carrier and will keep my registration current\./.test(s3) && /I accept that proven fly-tipping ends my place on Clean Up UK and CleanUpSnap\./.test(s3) && (s3.match(/<li>/g) || []).length === 5);
+    ok('the five Pledge lines are shown', /registered waste carrier and keep my registration current\./.test(s3) && /If fly-tipping is proven against me, I(&#39;|')m off Clean Up UK and off the app\./.test(s3) && (s3.match(/<li>/g) || []).length === 5);
     await req(owner, 'POST', '/settings/accept', { body: 'back=%2Fsettings&doc=privacy&doc=pledge' });
     ok('after the last ticks the banner is gone and Settings says all accepted', !/Please accept when you have a minute/.test((await req(owner, 'GET', '/')).text) && /All accepted\./.test((await req(owner, 'GET', '/settings')).text));
     ok('a stray back address cannot send the person elsewhere', !/evil/.test((await req(owner, 'POST', '/settings/accept', { body: 'back=https%3A%2F%2Fevil.example&doc=terms' })).loc));
@@ -1498,11 +1498,11 @@ async function phaseStanding() {
     await hook('CBDU527134', plus(300), 'upper');
     let s = (await standing()).j;
     ok('with a checked upper-tier registration but no Pledge tick, the business is not eligible', s.pledged === false && s.campaign_eligible === false && s.registration_tier === 'upper' && s.registration_number === 'CBDU527134' && s.registration_expires === plus(300) && !!s.registration_checked_at);
-    ok('the Settings card says what is missing, with no badge', /Not on Clean Up UK yet/.test((await req(owner, 'GET', '/settings')).text) && !/✔ Clean Up UK Pledged/.test((await req(owner, 'GET', '/settings')).text));
+    ok('the Settings card says what is missing, with no badge', /Not on Clean Up UK yet/.test((await req(owner, 'GET', '/settings')).text) && !/✔ Supports Clean Up UK/.test((await req(owner, 'GET', '/settings')).text));
     await req(owner, 'POST', '/settings/accept', { body: 'back=%2F&doc=pledge' });
     s = (await standing()).j;
     ok('ticking the Pledge makes it pledged with its version and time, and now eligible', s.pledged === true && s.pledge_version >= 1 && !!s.pledged_at && s.campaign_eligible === true);
-    ok('Settings shows the Clean Up UK Pledged badge', /✔ Clean Up UK Pledged/.test((await req(owner, 'GET', '/settings')).text));
+    ok('Settings shows the Clean Up UK Pledged badge', /✔ Supports Clean Up UK/.test((await req(owner, 'GET', '/settings')).text));
     // registration problems take eligibility away
     await hook('CBDL000001', plus(300), 'lower'); s = (await standing()).j;
     ok('a lower-tier registration is not eligible', s.pledged && s.registration_tier === 'lower' && s.campaign_eligible === false);
@@ -1520,7 +1520,7 @@ async function phaseStanding() {
     await req(owner, 'POST', `/api/jobs/${jid}/approve`, { json: {}, ...A });
     const link = (await req(owner, 'POST', `/api/jobs/${jid}/link`, { json: {}, ...A })).json().url, lp = new URL(link).pathname + new URL(link).search;
     const share = async () => (await fetch(BASE + lp)).text();
-    ok('the shared page shows the Pledged badge under the business name when eligible', /✔ Clean Up UK Pledged/.test(await share()));
+    ok('the shared page shows the Pledged badge under the business name when eligible', /✔ Supports Clean Up UK/.test(await share()));
     // reported: withdrawn
     ok('a flag needs a note', /m=bad/.test((await flag('reported', '')).loc) && (await standing()).j.reported === false);
     ok('"confirmed" before "reported" is refused', /m=bad/.test((await flag('confirmed', 'x')).loc) && (await standing()).j.removed_at === null);
@@ -1528,9 +1528,9 @@ async function phaseStanding() {
     ok('an admin can report with a note', /m=flagged/.test((await flag('reported', 'Council says a load was dumped at Test Lane')).loc));
     s = (await standing()).j;
     ok('reported: not eligible, still pledged, flag shown, and the note is not public', s.reported === true && s.campaign_eligible === false && s.pledged === true && !/Test Lane/.test(JSON.stringify(s)));
-    ok('reported: the badge is gone from the shared page, the video still plays', !/Clean Up UK Pledged/.test(await share()) && /<video/.test(await share()));
+    ok('reported: the badge is gone from the shared page, the video still plays', !/Supports Clean Up UK/.test(await share()) && /<video/.test(await share()));
     const st2 = (await req(owner, 'GET', '/settings')).text;
-    ok('reported: Settings says the listing is paused and the registered-carrier mark is withheld', /listing is paused/.test(st2) && /No registered-carrier mark is shown/.test(st2) && !/✔ Clean Up UK Pledged/.test(st2));
+    ok('reported: Settings says the listing is paused and the registered-carrier mark is withheld', /listing is paused/.test(st2) && /No registered-carrier mark is shown/.test(st2) && !/✔ Supports Clean Up UK/.test(st2));
     ok('the owner cannot set or clear a flag (admin sign-in only)', (await req(owner, 'POST', '/admin/standing', { body: form({ action: 'cleared', note: '' }) })).status === 401 && (await standing()).j.reported === true);
     // a new video made while reported has no mark
     const jid2 = await mk();
@@ -1548,7 +1548,7 @@ async function phaseStanding() {
     // cleared
     ok('an admin can clear it', /m=flagged/.test((await flag('cleared', 'Mistaken identity')).loc));
     s = (await standing()).j;
-    ok('cleared: everything is back (eligible, no removal, badge on the page and Settings)', s.campaign_eligible === true && s.removed_at === null && s.reported === false && /✔ Clean Up UK Pledged/.test(await share()) && /✔ Clean Up UK Pledged/.test((await req(owner, 'GET', '/settings')).text));
+    ok('cleared: everything is back (eligible, no removal, badge on the page and Settings)', s.campaign_eligible === true && s.removed_at === null && s.reported === false && /✔ Supports Clean Up UK/.test(await share()) && /✔ Supports Clean Up UK/.test((await req(owner, 'GET', '/settings')).text));
     ok('the log keeps all three entries, including the clearing note', /Mistaken identity/.test((await req(admin(), 'GET', '/admin')).text));
     // 12 months
     await rawFlag('confirmed', new Date(Date.now() - 400 * 864e5).toISOString());

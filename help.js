@@ -9,7 +9,7 @@ const { esc } = require('./lib/util');
 
 module.exports = function help({ app, SKIN, ui, acct }) {
   const { page } = ui;
-  const DIRS = [path.join(SKIN.dir, 'help'), path.join(__dirname, 'help')];
+  const DIRS = [path.join(SKIN.dir, 'help'), ...(SKIN.help_from ? [path.join(__dirname, 'skins', String(SKIN.help_from).replace(/[^a-z0-9-]/g, ''), 'help')] : []), path.join(__dirname, 'help')];   // help_from: borrow another skin's videos (the demo uses EKP11's)
   const POSTERS = path.join(process.env.MEDIA_DIR || path.join(__dirname, 'media'), 'help-posters');
   const find = name => { for (const d of DIRS) { const f = path.join(d, name); if (fs.existsSync(f)) return f; } return null; };
   function list() {

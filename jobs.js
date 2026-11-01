@@ -264,7 +264,7 @@ ${req.query.m === 'pc' ? '<p class="msg bad" role="alert">That postcode doesn\'t
     // Terms, privacy or Pledge not yet accepted at the current version: one banner with a tick. It never stops anyone making or sharing a video.
     const lgp = u.role === 'owner' ? await acct.legal.pending(u.id) : [];
     const legalBanner = lgp.length ? `<form class="card" method="post" action="/settings/accept" style="margin:0 0 12px"><input type="hidden" name="back" value="/"><p style="margin:0 0 8px"><b>${lgp.some(d => d.changed) ? 'There is a new version to accept' : 'Please accept when you have a minute'}</b></p>
-${lgp.map(d => `<label class="small" style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px"><input type="checkbox" name="doc" value="${d.key}" style="width:auto;margin-top:2px"> <span>I accept ${esc(d.short)}${d.changed ? ' (new version)' : ''}. <a href="${esc(d.url)}" target="_blank" rel="noopener">Read it</a></span></label>`).join('')}
+${lgp.map(d => `<label class="small" style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px"><input type="checkbox" name="doc" value="${d.key}" style="width:auto;margin-top:2px"> <span>${esc(d.tick)}${d.changed ? ' (new version)' : ''}. <a href="${esc(d.url)}" target="_blank" rel="noopener">Read it</a></span></label>`).join('')}
 <button class="sec small" type="submit">Accept</button><span class="small"> You can carry on making videos either way.</span></form>` : '';
     res.set('Cache-Control', 'no-store').send(page('Jobs', `
 ${legalBanner}${regWarn}${regAsk}${msg(flash)}${u.role === 'owner' || SKIN.crew_can_capture ? '<a class="btn" href="/new" style="min-height:72px;font-size:22px">＋ New job</a>' : ''}
