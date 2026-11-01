@@ -1451,6 +1451,9 @@ async function phaseOutputs() {
     const js = await (await get(owner, '/settings/export.json')).json();
     const rec = js.records.find(x => x.record_id === id);
     ok('the JSON has format, version, and one object per job', js.format === 'snaplite-job-records' && js.version === 1 && Array.isArray(js.records) && js.count === js.records.length && !!rec);
+    if (js.records.length <= 400) { const pdf = await get(owner, '/settings/export.pdf'), pb = Buffer.from(await pdf.arrayBuffer());
+      ok('all transfer notes download as one PDF, one page per job', pdf.status === 200 && /application\/pdf/.test(pdf.headers.get('content-type')) && pb.slice(0, 5).toString() === '%PDF-' && (pb.toString('latin1').match(/\/Type \/Page\b/g) || []).length === js.records.length, pdf.status + ' ' + js.records.length); }
+    ok('Settings offers the PDF of all notes, not the JSON button', /Download all transfer notes \(PDF\)/.test((await req(owner, 'GET', '/settings')).text) && !/office system \(JSON\)/.test((await req(owner, 'GET', '/settings')).text));
     ok('JSON field names are snake_case and hold the record', Object.keys(rec).every(k => /^[a-z][a-z0-9_]*$/.test(k)) && rec.customer_name === 'Mrs Smith' && rec.collection_postcode === 'LS12 2PY' && rec.quantity === 'half' && rec.quantity_cubic_yards === 8.5 && rec.ewc_code === '20 03 07' && rec.disposal_site_licence_number === 'JB3607UK' && rec.disposal_ticket_number === 'T-5521' && rec.media_deleted === false);
     const names = ct.split('\r\n')[0].replace('﻿', '').split(',');
     ok('the CSV and JSON have the same fields in the same order', JSON.stringify(names) === JSON.stringify(Object.keys(rec)));

@@ -19,17 +19,18 @@ module.exports = function outputs({ app, pool, SKIN, ui, acct, jobsMod, events }
       office: prof.office || SKIN.registered_office || rg.address || '', vat: prof.vat || '' } };
   }
 
+  // one job's details as the note needs them (driver = the person who made the job)
+  const noteJob = (j, driver) => ({ commercial: j.commercial, custBusiness: j.cust_business, custName: j.cust_name, custAddr: j.cust_addr, sic: j.commercial ? j.sic : '', addr1: j.addr1, area: j.area, postcode: j.postcode,
+    ticket: j.tip_ticket, jobType: j.job_type, date: EX.lonDate(j.created_at), wasteDesc: j.waste_desc, ewc: j.ewc, van: j.van ? require('./lib/profile').platePretty(j.van) : '',
+    tipName: j.tip_name, tipAddr: j.tip_addr, tipDate: j.tip_date, tipLicence: j.tip_licence, driver: driver || '' });
+  const logo = async () => { try { return await sharp(acct.logo.current()).flatten({ background: '#ffffff' }).png().toBuffer(); } catch (e) { return null; } };
   app.get('/jobs/:id/transfer-note.pdf', needUser(), needOwner, async (req, res, next) => { try {
     const j = await jobsMod.getJob(req.user, req.params.id);
     if (!j) return res.redirect(303, '/');
     const { prof, carrier } = await carrierInfo();
     const drv = (await pool.query('SELECT name FROM users WHERE id=$1', [j.user_id])).rows[0];
     const q = j.qty || j.qty_est;
-    let logoBuf = null; try { logoBuf = await sharp(acct.logo.current()).flatten({ background: '#ffffff' }).png().toBuffer(); } catch (e) {}
-    const buf = await notepdf.build({ carrier, accent: SKIN.accent, logoBuf, qtyLabel: q ? R.qtyText(q, prof.vanCap) : '',
-      job: { commercial: j.commercial, custBusiness: j.cust_business, custName: j.cust_name, custAddr: j.cust_addr, sic: j.commercial ? j.sic : '', addr1: j.addr1, area: j.area, postcode: j.postcode,
-        ticket: j.tip_ticket, jobType: j.job_type, date: EX.lonDate(j.created_at), wasteDesc: j.waste_desc, ewc: j.ewc, van: j.van ? require('./lib/profile').platePretty(j.van) : '',
-        tipName: j.tip_name, tipAddr: j.tip_addr, tipDate: j.tip_date, tipLicence: j.tip_licence, driver: (drv && drv.name) || '' } });
+    const buf = await notepdf.build({ carrier, accent: SKIN.accent, logoBuf: await logo(), qtyLabel: q ? R.qtyText(q, prof.vanCap) : '', job: noteJob(j, drv && drv.name) });
     events('transfer_note', req.user.id, j.id);
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="transfer-note-${j.id}.pdf"`, 'Cache-Control': 'private, no-store' }).send(buf);
   } catch (e) { next(e); } });
@@ -51,6 +52,18 @@ module.exports = function outputs({ app, pool, SKIN, ui, acct, jobsMod, events }
     events('records_export', req.user.id, null, 'csv ' + x.rows.length);
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="job-records${x.from || x.to ? `-${x.from || 'start'}-to-${x.to || 'today'}` : ''}.csv"`, 'Cache-Control': 'private, no-store' }).send(EX.toCsv(x.rows, x.ctx));
   } catch (e) { next(e); } });
+  // every transfer note in the date range as one PDF, one page per job (for an inspection, the accountant, or printing)
+  const MAX_NOTES = 400;
+  app.get('/settings/export.pdf', needUser(), needOwner, async (req, res, next) => { try {
+    const x = await rows(req); if (x.error) return bad(res, x.error);
+    if (!x.rows.length) return res.redirect(303, '/settings?m=exportnone#export');
+    if (x.rows.length > MAX_NOTES) return res.redirect(303, '/settings?m=exportmany#export');
+    const { prof, carrier } = await carrierInfo(), logoBuf = await logo();
+    const buf = await notepdf.buildMany(x.rows.map(j => { const q = j.qty || j.qty_est; return { carrier, accent: SKIN.accent, logoBuf, qtyLabel: q ? R.qtyText(q, prof.vanCap) : '', job: noteJob(j, j.driver_name) }; }));
+    events('records_export', req.user.id, null, 'pdf ' + x.rows.length);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="transfer-notes${x.from || x.to ? `-${x.from || 'start'}-to-${x.to || 'today'}` : ''}.pdf"`, 'Cache-Control': 'private, no-store' }).send(buf);
+  } catch (e) { next(e); } });
+  // JSON stays available for office software that asks for it; it is no longer shown as a button
   app.get('/settings/export.json', needUser(), needOwner, async (req, res, next) => { try {
     const x = await rows(req); if (x.error) return bad(res, x.error);
     events('records_export', req.user.id, null, 'json ' + x.rows.length);
