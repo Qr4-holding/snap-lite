@@ -175,7 +175,7 @@ ${rgv.overridden ? '<form method="post" action="/settings/registration/reset"><b
 ${(() => { const v = over.values || {}, pr = over.problems || [], er = f => { const x = pr.find(p => p.field === f); return x ? `<span class="small" style="color:#b00020">${esc(x.why)}</span>` : ''; };
 const val = (k, d) => esc(v[k] != null ? v[k] : d);
 return `<label class="f">Trading name <span class="small">(what customers know you as; used in the mark on your videos)</span><input name="trading" maxlength="100" value="${val('trading', rgv.trading || '')}" placeholder="${esc(rgv.registerName || SKIN.short_name || SKIN.name)}"></label>
-<label class="f">Mobile number <span class="small">(where quote enquiries go)</span><input name="mobile" type="tel" inputmode="tel" maxlength="20" value="${val('mobile', prof.mobileNice)}" placeholder="07700 900123">${er('mobile')}</label>
+<label class="f">Mobile number <span class="small">(where customers' quote requests go)</span><input name="mobile" type="tel" inputmode="tel" maxlength="20" value="${val('mobile', prof.mobileNice)}" placeholder="07700 900123">${er('mobile')}</label>
 <label class="f">Base town or area <span class="small">(where you work from)</span><input name="area" maxlength="60" value="${val('area', prof.area)}">${er('area')}</label>
 <label class="f">Van registration(s) <span class="small">(one per line)</span><textarea name="vans" rows="3" autocapitalize="characters" placeholder="AB12 CDE">${val('vans', prof.vans.map(x => require('./lib/profile').platePretty(x)).join('\n'))}</textarea>${er('vans')}</label>
 <label class="f">How big is your van? <span class="small">(cubic yards, so a full load can be shown in yards)</span><input name="van_cap" inputmode="decimal" maxlength="6" value="${val('van_cap', prof.vanCap)}">${er('van_cap')}</label>
@@ -191,7 +191,7 @@ ${prof.sites.length ? prof.sites.map((x, i) => `<div style="border-top:1px solid
 <form method="post" action="/settings/sites" style="display:grid;gap:8px;border-top:1px solid #0001;padding-top:8px"><label class="f">Site name<input name="name" maxlength="80" placeholder="Biffa, Armley Depot"></label><label class="f">Address<input name="address" maxlength="160"></label><label class="f">Site licence or permit number<input name="licence" maxlength="30" autocapitalize="characters"></label><button type="submit">Add this site</button></form></div>
 <h2>Logo</h2>
 <form class="card" method="post" action="/settings/logo" enctype="multipart/form-data"><img src="/assets/logo.png?v=${esc(logo.version())}" alt="Your logo" style="max-height:80px;max-width:60%;background:#fff;border-radius:8px;padding:6px"><p class="small" style="margin:0">Used on your videos from now on. Videos already made are not changed. A PNG with a clear background looks best.</p>
-<label class="f">Choose a picture (PNG or JPG)<input name="logo" type="file" accept="image/png,image/jpeg" required></label><button type="submit">Save logo</button></form>
+<label class="f">Choose a picture (PNG or JPG)<input name="logo" type="file" accept="image/png,image/jpeg" required data-pick="Choose a picture"></label><button type="submit">Save logo</button></form>
 ${hasLogo ? '<form method="post" action="/settings/logo/reset"><button class="sec" type="submit">Put back the standard logo</button></form>' : ''}
 <h2>Terms, privacy and Clean Up UK</h2>
 <form class="card" method="post" action="/settings/accept"><input type="hidden" name="back" value="/settings">
