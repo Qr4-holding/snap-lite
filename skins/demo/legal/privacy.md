@@ -1,9 +1,9 @@
-Version: 4
+Version: 5
 # Privacy notice
 
 *First draft, in plain English. To be reviewed before it is relied on.*
 
-This explains what we keep about you and your jobs, and why. We are XpressIQ Limited, which runs CleanUpSnap and Clean Up UK.
+This explains what we keep about you and your jobs, and why. We are CleanUpPic, which runs Clean Up UK.
 
 ## What we store
 - **Your account:** your email address, your name if you give it, and your password (kept scrambled, so we cannot read it).

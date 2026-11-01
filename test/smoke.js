@@ -1013,9 +1013,9 @@ async function phaseIntake1() {
   ok('plates are shown with the space (AB12 CDE)', P.platePretty('AB12CDE') === 'AB12 CDE' && P.platePretty('K1') === 'K1');
   // versions
   const D = L.docs({});
-  ok('the Pledge has the five standard lines, Terms version 3 and Privacy version 4 by default', D.pledge.lines.length === 5 && D.pledge.version === 2 && D.terms.version === 3 && D.privacy.version === 4);
+  ok('the Pledge has the five standard lines, Terms version 4 and Privacy version 5 by default', D.pledge.lines.length === 5 && D.pledge.version === 2 && D.terms.version === 4 && D.privacy.version === 5);
   const D2 = L.docs({ legal: { pledge: { version: 3, lines: ['Only ours.'] }, terms: { version: 7 } } });
-  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 7 && D2.privacy.version === 4);
+  ok('a skin can word the Pledge for one business and set versions', D2.pledge.version === 3 && D2.pledge.lines.length === 1 && D2.terms.version === 7 && D2.privacy.version === 5);
   if (process.env.LOCAL_DATABASE_URL) await legalDb();
   // the three pages are served by the app itself, to anyone, with no sign-in
   for (const k of ['terms', 'privacy', 'pledge']) {
