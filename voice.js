@@ -82,7 +82,7 @@ ${noteHtml}
 <form method="post" action="/jobs/${j.id}/voice" class="card">
 <b>Voice</b>${opts}
 <b style="margin-top:6px">What the video says</b>
-${[0, 1, 2].map(i => `<label class="f"><span class="small">Line ${i + 1}${i === 0 ? ' (over BEFORE)' : i === 1 ? ' (over AFTER)' : ' (over the end card)'}</span><textarea name="line${i + 1}" rows="2" maxlength="140" required>${esc(lines[i] || '')}</textarea></label>`).join('')}
+${[0, 1, 2].map(i => `<label class="f"><span class="small">Line ${i + 1}${i === 0 ? ' (over BEFORE)' : i === 1 ? ' (over AFTER)' : ' (over the end screen with your details)'}</span><textarea name="line${i + 1}" rows="2" maxlength="140" required>${esc(lines[i] || '')}</textarea></label>`).join('')}
 <p class="small" id="src">${source === 'claude' ? 'Written for this job. Change anything you like.' : 'Standard lines. Change anything you like.'} Words like prices, “best” or promises are taken out automatically.</p>
 <button type="button" class="sec" id="redo">Suggest new lines</button>
 <button type="submit">Make video</button></form>
