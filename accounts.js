@@ -119,7 +119,7 @@ ${msg(m, true)}
 <label class="f">Password<input name="password" type="password" required autocomplete="current-password"></label>
 <button type="submit">Sign in</button>
 </form>
-<p><a href="/forgot">Forgot password?</a> &nbsp;·&nbsp; <a href="/help">How does this work?</a></p>
+<p><a href="/forgot">Forgot password?</a> &nbsp;·&nbsp; <a href="/help">Help Videos</a></p>
 ${joinBlock()}`);
 
   app.get('/login', async (req, res, next) => { try {
@@ -150,7 +150,7 @@ ${joinBlock()}`);
     const q = req.query, flash = over.flash != null ? over.flash : { invited: '', keys: 'Keys saved.', reg: 'Checked against the Environment Agency register and saved.', reglower: 'Saved. This is a lower tier registration, which covers your own waste only, so the registered-carrier mark is left off your videos.', regnone: "Not saved: that number isn't on the Environment Agency register. Check it against your registration certificate and try again.", regoffline: "Saved, but we couldn't reach the Environment Agency register just now, so it hasn't been checked. Tap Check again in a few minutes.", regcleared: 'Registration removed. No mark is shown on your videos.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: a registration number is letters then numbers, for example CBDU123456, and an expiry date must be a real date.', bizsaved: 'Business details saved.', exportbad: 'Those dates are not real dates. Pick them from the calendar, or leave them empty.', exportorder: 'The From date is after the To date. Swap them and try again.', siteadded: 'Site added.', siteremoved: 'Site removed.', sitebad: 'Not added. Give the site a name, and check the licence number (letters and numbers only) and that it is not already in the list.', logook: 'Logo saved. It is used on videos you make from now on.', logoreset: 'Standard logo put back.', logobad: "That file couldn't be read as a picture. Use a PNG or JPG.", accepted: 'Thank you. Your acceptance is saved.', acceptnone: 'Tick the box next to each one you accept, then tap Accept.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
     return page('Settings', `
-<h1>Settings</h1>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone|sitebad|exportbad|exportorder)$/.test(q.m || ''))}${invited}
+<h1>Settings</h1><p><a class="btn help" href="/help">▶ Help Videos</a></p>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone|sitebad|exportbad|exportorder)$/.test(q.m || ''))}${invited}
 <p>Signed in as <b>${esc(u.email)}</b> (${u.role}).</p>
 ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
@@ -201,12 +201,12 @@ ${d.accepted ? `<br><span class="small">Accepted${d.acceptedNice ? ` on ${esc(d.
 ${lg.every(d => d.accepted) ? '<p class="small" style="margin:0">All accepted. We keep a record of who accepted which version, and when.</p>' : '<button type="submit">Accept</button>'}</form>` : ''}
 ${u.role === 'owner' ? `<h2 id="export">Export records</h2>
 <form class="card" method="get" action="/settings/export.csv"><p class="small" style="margin:0"><b>Ready for Digital Waste Tracking.</b> One record for every job in the dates you choose, with the address, customer, waste, quantity, vehicle and disposal details. Jobs whose photos you deleted are included, because the record is kept for two years. Leave both dates empty to get everything.</p>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label class="f">From<input name="from" type="date"></label><label class="f">To<input name="to" type="date"></label></div>
+<div class="two"><label class="f">From<input name="from" type="date"></label><label class="f">To<input name="to" type="date"></label></div>
 <button type="submit">Download as a spreadsheet (CSV)</button><button class="sec" type="submit" formaction="/settings/export.json">Download for your office system (JSON)</button></form>` : ''}
 <h2>Change password</h2>
 <form class="card" method="post" action="/settings/password"><label class="f">Current password<input name="current" type="password" required autocomplete="current-password"></label><label class="f">New password (8 or more characters)<input name="next" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit">Save password</button></form>
 ${u.role === 'owner' ? `<h2>Keys</h2><p class="small">Voice and writing are switched on here. Sign in with the admin login.</p><p><a class="btn sec" href="/admin">Voice and writing keys</a></p>` : ''}
-<h2>Help</h2><p><a class="btn sec" href="/help">How does this work? (short videos)</a></p>
+
 <h2>App</h2><p class="small">Version <span id="v">${esc(process.env.APP_VERSION || 'dev')}</span></p>
 <form method="post" action="/logout"><button class="sec" type="submit">Sign out</button></form>
 <h2>Delete my account</h2>

@@ -25,9 +25,9 @@ module.exports = function help({ app, SKIN, ui, acct }) {
     const card = i => `<div class="card" style="margin:0 0 18px"><h2 style="margin:0 0 10px;font-size:19px">${esc(i.title)}</h2>${i.file
       ? `<video controls playsinline preload="none" poster="/help/p/${i.id}.jpg" src="/help/v/${i.id}.mp4" style="${aspect};object-fit:contain"></video>`
       : `<div style="${aspect};display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;font-weight:700;padding:20px;box-sizing:border-box">Video coming soon</div>`}</div>`;
-    res.set('Cache-Control', 'no-store').send(page('Help', `<h1>How does this work?</h1>
+    res.set('Cache-Control', 'no-store').send(page('Help Videos', `<h1>Help Videos</h1>
 <p class="small">Short videos. Tap one to play it.</p>${shown.map(card).join('') || '<p>No videos yet.</p>'}
-${u ? '' : '<p class="small">Sign in to see the rest of the videos.</p><a class="btn sec" href="/login">Back to sign in</a>'}`, { user: u, nav: 'settings' }));
+${u ? '' : '<p class="small">Sign in to see the rest of the videos.</p><a class="btn sec" href="/login">Back to sign in</a>'}`, { user: u, nav: 'help' }));
   } catch (e) { next(e); } });
 
   const one = async (req, res) => { const i = list().find(x => x.id === req.params.id); if (!i || !i.file) return null; if (!i.public && !(await user(req))) { res.status(401).end(); return false; } return i; };

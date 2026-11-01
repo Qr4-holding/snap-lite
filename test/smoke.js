@@ -793,14 +793,14 @@ async function phaseHelp() {
   const pub = manifest.filter(m => m.public), priv = manifest.filter(m => !m.public);
   ok('the help list has one public video and more for signed-in people', pub.length >= 1 && priv.length >= 1);
   const out = await req(person(), 'GET', '/help');
-  ok('/help opens signed out', out.status === 200 && /How does this work\?/.test(out.text));
+  ok('/help opens signed out', out.status === 200 && /Help Videos/.test(out.text));
   ok('signed out shows the public video titles only', pub.every(m => out.text.includes(m.title)) && priv.every(m => !out.text.includes(m.title)));
   ok('signed out offers to sign in for the rest', /Sign in to see the rest/.test(out.text));
   const inn = await req(owner, 'GET', '/help');
   ok('signed in shows every video title', manifest.every(m => inn.text.includes(m.title)) && !/Sign in to see the rest/.test(inn.text));
   ok('videos that are not there yet show Video coming soon, and the others a portrait player', /Video coming soon/.test(inn.text) || /<video controls playsinline/.test(inn.text));
   ok('the player is portrait and does not autoplay', !/<video[^>]*autoplay/.test(inn.text) && (!/<video/.test(inn.text) || /aspect-ratio:9\/16/.test(inn.text)));
-  ok('the sign-in screen links to it', /href="\/help">How does this work\?/.test((await req(person(), 'GET', '/login')).text));
+  ok('the sign-in screen links to it', /href="\/help">Help Videos/.test((await req(person(), 'GET', '/login')).text));
   ok('Settings has a Help entry', /href="\/help"/.test((await req(owner, 'GET', '/settings')).text));
   for (const m of manifest) {
     const v = await req(person(), 'GET', `/help/v/${m.id}.mp4`), vi = await req(owner, 'GET', `/help/v/${m.id}.mp4`);

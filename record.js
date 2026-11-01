@@ -137,7 +137,7 @@ ${j.items && j.items.length ? `<p class="small" style="margin:0">Seen in the pho
 <label class="f">Site name<input name="tip_name" maxlength="80" value="${val(over, 'tip_name', j.tip_name)}"></label>
 <label class="f">Site address<input name="tip_addr" maxlength="160" value="${val(over, 'tip_addr', j.tip_addr)}"></label>
 <label class="f">Site licence or permit number<input name="tip_licence" maxlength="30" autocapitalize="characters" value="${val(over, 'tip_licence', j.tip_licence)}">${er('tip_licence')}</label>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label class="f">Date<input name="tip_date" type="date" value="${val(over, 'tip_date', j.tip_date)}">${er('tip_date')}</label><label class="f">Ticket number<input name="tip_ticket" maxlength="40" value="${val(over, 'tip_ticket', j.tip_ticket)}"></label></div></div>
+<div class="two"><label class="f">Date<input name="tip_date" type="date" value="${val(over, 'tip_date', j.tip_date)}">${er('tip_date')}</label><label class="f">Ticket number<input name="tip_ticket" maxlength="40" value="${val(over, 'tip_ticket', j.tip_ticket)}"></label></div></div>
 <button type="submit">Save the job record</button></form>
 <form method="post" action="/jobs/${j.id}/record/read" style="margin-top:10px"><button class="sec" type="submit">Read the photos again</button><p class="small" style="margin:6px 0 0">This lists the items, the flags and the quantity again from the photos, and replaces the line and code above.</p></form>
 <a class="btn sec" href="/jobs/${j.id}" style="margin-top:10px">Back to the job</a>`, { user: u });
