@@ -16,7 +16,7 @@ const MEDIA_DIR = process.env.MEDIA_DIR || '/data/media';
 const JOBS_DIR = path.join(MEDIA_DIR, 'jobs');
 const STATES = ['draft', 'rendering', 'ready', 'approved', 'shared', 'failed'];
 
-module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, getRecord, diag }) {
+module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, getRecord, getHub, diag }) {
   const REC = require('./lib/record');
   const { page, msg } = ui;
   const { needUser, needOwner } = acct;
@@ -45,7 +45,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
     for (const c of ["postcode TEXT NOT NULL DEFAULT ''", "addr1 TEXT NOT NULL DEFAULT ''", "cust_name TEXT NOT NULL DEFAULT ''", "cust_addr TEXT NOT NULL DEFAULT ''", 'commercial BOOLEAN NOT NULL DEFAULT false',
       "cust_business TEXT NOT NULL DEFAULT ''", "sic TEXT NOT NULL DEFAULT ''", "qty TEXT NOT NULL DEFAULT ''", "qty_est TEXT NOT NULL DEFAULT ''", "items JSONB", "flags JSONB", "waste_desc TEXT NOT NULL DEFAULT ''",
       "ewc TEXT NOT NULL DEFAULT ''", "van TEXT NOT NULL DEFAULT ''", "tip_name TEXT NOT NULL DEFAULT ''", "tip_addr TEXT NOT NULL DEFAULT ''", "tip_licence TEXT NOT NULL DEFAULT ''", "tip_date TEXT NOT NULL DEFAULT ''",
-      "tip_ticket TEXT NOT NULL DEFAULT ''", 'has_receipt BOOLEAN NOT NULL DEFAULT false', 'analysed_at TIMESTAMPTZ', "analyse_note TEXT NOT NULL DEFAULT ''", 'deleted_at TIMESTAMPTZ']) await pool.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ' + c);
+      "tip_ticket TEXT NOT NULL DEFAULT ''", 'has_receipt BOOLEAN NOT NULL DEFAULT false', 'analysed_at TIMESTAMPTZ', "analyse_note TEXT NOT NULL DEFAULT ''", 'deleted_at TIMESTAMPTZ', 'hub_slug TEXT', 'hub_at TIMESTAMPTZ', 'hub_stale BOOLEAN NOT NULL DEFAULT false', "hub_title TEXT NOT NULL DEFAULT ''", "hub_trade TEXT NOT NULL DEFAULT ''"]) await pool.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ' + c);
     await pool.query('CREATE INDEX IF NOT EXISTS jobs_biz_state ON jobs (biz_id, state, created_at DESC)');
     await pool.query(`CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY, user_id INT NOT NULL, platform TEXT, push_subscription JSONB, app_version TEXT, last_seen TIMESTAMPTZ DEFAULT now())`);
@@ -183,7 +183,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
     const j = await getJob(user, id);
     if (!j) return false;
     const hasRecord = j.has_receipt || j.waste_desc || j.cust_name || j.cust_addr || j.addr1 || j.qty || j.tip_name || j.tip_ticket || j.cust_business || j.items;
-    if (!['ready', 'approved', 'shared'].includes(j.state) && !hasRecord) {
+    if (!['ready', 'approved', 'shared'].includes(j.state) && !hasRecord && !j.hub_slug) {
       await pool.query('DELETE FROM jobs WHERE id=$1', [j.id]);
       fs.rm(dirOf(j.id), { recursive: true, force: true }, () => {});
       events('job_deleted', user.id, j.id);
@@ -193,6 +193,7 @@ module.exports = function jobs({ app, pool, SKIN, ui, acct, events, getShare, ge
     await pool.query('DELETE FROM job_photos WHERE job_id=$1', [j.id]);
     try { for (const f of fs.readdirSync(dirOf(j.id))) if (f !== 'receipt.jpg') fs.rmSync(path.join(dirOf(j.id), f), { recursive: true, force: true }); } catch (e) {}
     events('job_deleted_record_kept', user.id, j.id);
+    if (j.hub_slug) getHub().sweep();                                  // and off the hub (retried every hour until it is gone)
     return true;
   }
   app.delete('/api/jobs/:id', sameOrigin, needUser({ json: true }), needOwner, async (req, res, next) => { try {
@@ -394,11 +395,13 @@ note();
     const poll = j.state === 'rendering' ? `var n=0;(function p(){fetch('/api/jobs/${j.id}/status',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.state!=='rendering'){location.reload();}else{setTimeout(p,Math.min(5000,1500+(n++)*500));}}).catch(function(){setTimeout(p,4000);});})();` : '';
     const sh = ['approved', 'shared'].includes(j.state) ? getShare().panel(j, owner) : null;
     const rec = await getRecord().forJobPage(u, j, mayEditDetails(u, j));
+    const hubCard = owner && (j.hub_slug || ['approved', 'shared'].includes(j.state)) ? await getHub().jobCard(j, req.query) : '';
     res.set('Cache-Control', 'no-store').send(page('Job', `
 <h1 style="font-size:22px;margin:0 0 6px">${esc(j.job_type || 'Job')} <span class="pill on" style="vertical-align:middle">${LABEL[j.state]}</span></h1>${j.area ? `<p class="small" style="margin:0 0 8px">📍 ${esc(j.area)}</p>` : ''}
 ${saved}${notStarted}${busy}${fail}${rec.warn}${player}
 ${owner && j.state === 'ready' ? `<form method="post" action="/jobs/${j.id}/approve" style="margin-top:10px"><button type="submit">Approve</button></form>` : ''}
 ${sh ? sh.html : ''}
+${hubCard}
 ${rec.card}
 ${done ? '' : `<div class="shots">${thumbs || '<p class="small">No photos yet.</p>'}</div>`}
 <div style="display:grid;gap:10px;margin-top:12px">

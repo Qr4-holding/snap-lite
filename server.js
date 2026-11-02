@@ -144,14 +144,16 @@ ${ios ? iosSteps : androidSteps}`, {}));
 // ---------- modules ----------
 const secrets = require('./lib/secrets')(pool);
 let mailMod;
-const acct = require('./accounts')({ app, pool, SKIN, ui, events, getMail: () => mailMod });
+let hubMod;
+const acct = require('./accounts')({ app, pool, SKIN, ui, events, getMail: () => mailMod, getHub: () => hubMod });
 mailMod = require('./mail')(secrets, SKIN, acct.TEST_DOMAIN);
 let shareMod;
 const helpMod = require('./help')({ app, SKIN, ui, acct });
 const diagMod = require('./diag')({ app, pool, SKIN, ui, acct });
 let recordMod;
-const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, diag: diagMod, getShare: () => shareMod, getRecord: () => recordMod });
+const jobsMod = require('./jobs')({ app, pool, SKIN, ui, acct, events, diag: diagMod, getShare: () => shareMod, getRecord: () => recordMod, getHub: () => hubMod });
 shareMod = require('./share')({ app, pool, SKIN, ui, acct, jobsMod, events });
+hubMod = require('./hub')({ app, pool, SKIN, ui, acct, jobsMod, events, secrets });
 const linesMod = require('./lines')(SKIN, secrets);
 let voiceMod, renderMod;
 renderMod = require('./render')({ app, pool, SKIN, acct, jobsMod, events, getVoice: () => voiceMod, getRecord: () => recordMod });

@@ -10,7 +10,7 @@ const legalFor = require('./lib/legal');
 const logoMod = require('./lib/logo');
 const multer = require('multer');
 const sharp = require('sharp');
-module.exports = function accounts({ app, pool, SKIN, ui, events, getMail }) {
+module.exports = function accounts({ app, pool, SKIN, ui, events, getMail, getHub }) {
   const { page, msg } = ui;
   const form = express.urlencoded({ extended: false, limit: '10kb' });
   const SESSION_DAYS = 180;
@@ -149,8 +149,9 @@ ${joinBlock()}`);
     const prof = u.role === 'owner' ? await profileMod.get() : null, lg = u.role === 'owner' ? await legalMod.status(u.id) : null, hasLogo = logo.custom();
     const q = req.query, flash = over.flash != null ? over.flash : { invited: '', keys: 'Keys saved.', reg: 'Checked against the Environment Agency register and saved.', reglower: 'Saved. This is a lower tier registration, which covers your own waste only, so the registered-carrier mark is left off your videos.', regnone: "Not saved: that number isn't on the Environment Agency register. Check it against your registration certificate and try again.", regoffline: "Saved, but we couldn't reach the Environment Agency register just now, so it hasn't been checked. Tap Check again in a few minutes.", regcleared: 'Registration removed. No mark is shown on your videos.', regreset: 'Registration details put back to the standard ones.', regbad: 'Not saved: a registration number is letters then numbers, for example CBDU123456, and an expiry date must be a real date.', bizsaved: 'Business details saved.', exportbad: 'Those dates are not real dates. Pick them from the calendar, or leave them empty.', exportorder: 'The From date is after the To date. Swap them and try again.', exportnone: 'There are no jobs in those dates.', exportmany: 'That is more than 400 jobs. Choose a shorter range of dates.', siteadded: 'Site added.', siteremoved: 'Site removed.', sitebad: 'Not added. Give the site a name, and check the licence number (letters and numbers only) and that it is not already in the list.', logook: 'Logo saved. It is used on videos you make from now on.', logoreset: 'Standard logo put back.', logobad: "That file couldn't be read as a picture. Use a PNG or JPG.", accepted: 'Thank you. Your acceptance is saved.', acceptnone: 'Tick the box next to each one you accept, then tap Accept.', pw: 'Password changed.', removed: 'Crew member removed.', badpw: 'Not changed: the current password was wrong, or the new one is under 8 characters.', bad: 'Please check the details and try again.', dup: 'There is already an account with that email.' }[q.m] || '';
     const invited = q.m === 'invited' && /^[A-Za-z0-9]{6,20}$/.test(q.p || '') && EMAIL.test(q.e || '') ? `<p class="msg">Crew login created. Give ${esc(q.e)} this temporary password now, it is not shown again: <b style="font-size:22px">${esc(q.p)}</b></p>` : '';
+    const hubCard = u.role === 'owner' ? await getHub().settingsCard() : '';
     return page('Settings', `
-<h1>Settings</h1><p><a class="btn help" href="/help">▶ Help Videos</a></p>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone|sitebad|exportbad|exportorder|exportnone|exportmany)$/.test(q.m || ''))}${invited}
+<h1>Settings</h1><p><a class="btn help" href="/help">▶ Help Videos</a></p>${msg(flash, over.isBad || /^(bad|dup|badpw|regbad|regnone|logobad|acceptnone|sitebad|exportbad|exportorder|exportnone|exportmany)$/.test(q.m || ''))}${getHub().flash(q)}${invited}
 <p>Signed in as <b>${esc(u.email)}</b> (${u.role}).</p>
 ${u.role === 'owner' && SKIN.crew_enabled ? `<h2>Crew</h2>
 ${crew.length ? `<div class="jobs">${crew.map(c => `<div class="card"><b>${esc(c.email)}</b><form method="post" action="/settings/crew/${c.id}/remove" onsubmit="return confirm('Remove this person?')"><button class="bad small" type="submit">Remove</button></form></div>`).join('')}</div>` : '<p class="small">No crew logins yet.</p>'}
@@ -160,6 +161,7 @@ ${stv ? `<div class="card" id="standing"><h2 style="margin-top:0">Clean Up UK</h
  : stv.reported ? '<p style="margin:0"><b>Your Clean Up UK listing is paused</b></p><p class="small" style="margin:0">A report is being looked at. Your videos are still made, without the registered-carrier mark, until it is settled.</p>'
  : stv.flag === 'confirmed' ? `<p style="margin:0"><b>${esc(stv.removed_text || 'Removed from Clean Up UK')}</b></p><p class="small" style="margin:0">You are no longer on Clean Up UK. Your videos are still made, without the registered-carrier mark.</p>`
  : `<p style="margin:0"><b>Not on Clean Up UK yet</b></p><p class="small" style="margin:0">${!stv.pledged ? 'Tick I support Clean Up UK in the box above. ' : ''}${!stv.verified ? 'Save a registration number and check it against the register, in the box above. ' : ''}Your own videos and quote button work either way.</p>`}</div>` : ''}
+${hubCard}
 ${rgv ? `<h2>Waste carrier registration</h2>
 <form class="card" method="post" action="/settings/registration"><p class="small" style="margin:0">Type your registration number. We check it against the Environment Agency register and fill in the rest. While it is current, a small mark shows on every new video and on its end screen. It comes off the day after the expiry date. Videos already made are not changed.</p>
 <label class="f">Registration number<input name="number" maxlength="20" autocapitalize="characters" value="${esc(rgv.number)}" placeholder="CBDU123456"></label>

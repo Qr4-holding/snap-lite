@@ -17,3 +17,6 @@ Not a public website, feed, quote system or auto-poster. Everything is behind a 
 - `skins/<id>/skin.json` + `logo.png.b64`: everything client-specific. A new client is a new folder.
 - `deploy/snaplite.compose.yml` Docker project for the Hostinger VPS (push to main, restart the project).
 - `video/engine.py` the video engine inherited from snapthejob-site (replaced in phase 4).
+
+## Publish to CleanUpPic
+`hub.js`. Off until the app's /admin holds the hub address and this app's key (from Connected apps in the hub's admin). The owner accepts the carrier terms in Settings, then chooses each video. Test: `node test/hub.js`, against the demo app and a test hub only.

@@ -55,7 +55,7 @@ module.exports = function render({ app, pool, SKIN, acct, jobsMod, events, getVo
       const m = /RESULT (\{.*\})/.exec(r.out); const res = m ? JSON.parse(m[1]) : null;
       if (r.code !== 0 || !res || !res.ok) throw new Error((res && res.errors && res.errors.join('; ')) || (r.err || 'Render failed').slice(-300));
       fs.writeFileSync(path.join(dir, 'timing.json'), JSON.stringify({ timing: res.timing || [], stills: res.stills, padding: res.padding || [] })); fs.renameSync(cfg.out, path.join(dir, 'video.mp4')); fs.renameSync(cfg.cover, path.join(dir, 'cover.jpg'));
-      await pool.query("UPDATE jobs SET state='ready', video='video.mp4', cover='cover.jpg', dur=$2, render_error=NULL WHERE id=$1 AND state='rendering'", [id, String(res.duration)]);
+      await pool.query("UPDATE jobs SET state='ready', video='video.mp4', cover='cover.jpg', dur=$2, render_error=NULL, hub_stale=(hub_slug IS NOT NULL) WHERE id=$1 AND state='rendering'", [id, String(res.duration)]);
       events('rendered', null, id, `${res.duration}s in ${Math.round((Date.now() - t0) / 1000)}s`);
     } catch (e) {
       await pool.query("UPDATE jobs SET state='failed', render_error=$2 WHERE id=$1 AND state='rendering'", [id, e.tag || 'other']).catch(() => {});
